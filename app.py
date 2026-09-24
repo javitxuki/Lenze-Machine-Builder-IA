@@ -3,7 +3,7 @@ from pathlib import Path
 import streamlit as st
 from machine_builder_core import *
 
-from auth import init_auth_state, render_login, logout, change_password, change_password
+from auth import init_auth_state, render_login, logout, change_password
 
 
 TEXTS = {
@@ -330,6 +330,8 @@ def render_corporate_header():
     with avatar_col:
         render_user_dropdown()
 
+
+render_corporate_header()
 
 @st.cache_data
 def repo_data(): return load_repository()
