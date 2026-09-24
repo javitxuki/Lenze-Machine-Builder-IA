@@ -25,7 +25,7 @@ st.markdown(
     --lenze-bg: #f4f6f9;
 }
 [data-testid="stHeader"], #MainMenu, footer { display: none; }
-.block-container { padding-top: .7rem !important; max-width: 1220px !important; }
+.block-container { padding-top: .7rem !important; max-width: 98% !important; }
 [data-testid="stAppViewContainer"] { background: var(--lenze-bg); }
 .lenze-head {
     background: #fff;
@@ -35,6 +35,7 @@ st.markdown(
     display: flex;
     align-items: center;
     gap: 18px;
+    width: 100%
 }
 .lenze-head img { width: 130px; max-height: 46px; object-fit: contain; }
 .lenze-title { border-left: 1px solid #d7dce5; padding-left: 18px; }
