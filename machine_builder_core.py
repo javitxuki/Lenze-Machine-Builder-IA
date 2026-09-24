@@ -184,13 +184,26 @@ def main():
             plc_prg=application.create_pou("PLC_PRG")
     plc_prg.textual_declaration.replace({declaration!r})
     plc_prg.textual_implementation.replace({implementation!r})
-    task_cfg=find_one(application,"Task Configuration") or application.create_task_configuration()
-    task=find_one(task_cfg,"MainTask") or task_cfg.create_task("MainTask")
-    task.interval="T#10ms"
-    try: task.priority=1
-    except: pass
-    try: task.pous.add("PLC_PRG")
-    except: pass
+    # La descripción Lenze crea automáticamente EtherCAT_Task.
+    # No crear Task Configuration, MainTask ni ninguna tarea adicional.
+    task_cfg=find_one(application,"Task Configuration")
+    if task_cfg is None:
+        raise Exception("Task Configuration no encontrada después de insertar EtherCAT Master.")
+
+    task=find_one(task_cfg,"EtherCAT_Task")
+    if task is None:
+        # Compatibilidad con proyectos/plantillas que ya tengan MainTask.
+        task=find_one(task_cfg,"MainTask")
+
+    if task is None:
+        raise Exception("No se encontró una tarea existente EtherCAT_Task o MainTask.")
+
+    try:
+        task.pous.add("PLC_PRG")
+        log("PLC_PRG asociado a la tarea existente: " + str(task.get_name()))
+    except Exception as error:
+        # Si PLC_PRG ya estaba asociado, ScriptEngine puede lanzar excepción.
+        log("Aviso asociando PLC_PRG a la tarea existente: " + str(error))
     project.save()
     log("Proyecto generado: " + PROJECT_PATH)
 
