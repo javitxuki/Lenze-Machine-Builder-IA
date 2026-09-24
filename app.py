@@ -123,19 +123,43 @@ for i,a in enumerate(st.session_state.axes):
         for col,z in zip(zcols,("z1","z2","z3","z4")):
             a[z]=col.number_input(z.upper(),1,1000000,int(a.get(z,1)),key=f"{z}{i}")
         c1,c2,c3=st.columns(3)
-        fkey=f"feed{i}"
-        st.session_state.setdefault(fkey,str(a.get("feed_constant",360)))
-        a["feed_constant"]=c1.text_input(t("feed"),key=fkey)
+        fkey = f"feed{i}"
+
+        feed_value = str(
+            st.session_state.axes[i].get(
+                "feed_constant",
+                360.0
+            )
+        )
+
+        a["feed_constant"] = c1.text_input(
+            t("feed"),
+            value=feed_value,
+            key=fkey
+        )
         if a["kinematics"]=="ROTARY":
             a["cycle_length"]=c2.text_input(t("cycle"),str(a.get("cycle_length",360)),key=f"cycle{i}")
         else:
             a["cycle_length"]=0.0
-        if c3.button("🧮 "+t("calc"),key=f"fc{i}",use_container_width=True,type="primary"):
+        if c3.button(
+            "🧮 " + t("calc"),
+            key=f"fc{i}",
+            use_container_width=True,
+            type="primary"
+        ):
             try:
-                result=feed_calc(a["kinematics"],a["kinematic_parameter"])
-                st.session_state[fkey]=fmt(result)
-                a["feed_constant"]=st.session_state[fkey]
+
+                result = feed_calc(
+                    a["kinematics"],
+                a["kinematic_parameter"]
+                )
+
+                # Guardar en el modelo de datos,
+                # NO en el widget Streamlit
+                st.session_state.axes[i]["feed_constant"] = fmt(result)
+
                 st.rerun()
+
             except Exception as error:
                 st.error(str(error))
 cfg={"format":"LenzeMachineBuilderWeb","format_version":2,"cpu_model":cpu,"cpu_version":cpu_sel.get("version",""),"cpu_device_id":cpu_sel.get("device_id",cpu_sel.get("type","")),"ethercat_master_label":master_label,"ethercat_master_version":master_sel.get("version",""),"ethercat_master_device_id":master_sel.get("device_id",master_sel.get("type","")),"project_path":project_path,"axes":st.session_state.axes,"robot_groups":[]}
