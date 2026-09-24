@@ -251,10 +251,12 @@ def header():
 
 
 def request_feed_update(axis_index, result):
-    """Callback ejecutado antes del rerun de Streamlit."""
+
     formatted = format_decimal(result)
-    st.session_state.axes[axis_index]["feed_constant"] = formatted
-    st.session_state[f"feed{axis_index}"] = formatted
+
+    st.session_state.axes[
+        axis_index
+    ]["feed_constant"] = formatted
 
 
 init_auth_state()
@@ -427,10 +429,20 @@ for i, axis in enumerate(st.session_state.axes):
 
         col1, col2, col3 = st.columns(3)
         feed_key = f"feed{i}"
-        if feed_key not in st.session_state:
-            st.session_state[feed_key] = str(axis.get("feed_constant", 360.0))
 
-        axis["feed_constant"] = col1.text_input(t("feed"), key=feed_key)
+        current_feed = str(
+            axis.get(
+            "feed_constant",
+            360.0
+            )
+        )
+
+        axis["feed_constant"] = col1.text_input(
+            t("feed"),
+            value=current_feed,
+            key=f"feed_widget_{i}"
+        )
+
 
         if axis["kinematics"] == "ROTARY":
             axis["cycle_length"] = col2.text_input(
