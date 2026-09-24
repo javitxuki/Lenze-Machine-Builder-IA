@@ -1,131 +1,39 @@
-import os
-import json
-import hmac
+import os, json, hmac
 import streamlit as st
 
-DEFAULT_USERS = {
-    "javier.salvador@lenze.com": {
-        "password": "admin",
-        "role": "admin",
-        "name": "Javier Salvador"
-    },
-    "javisalvador1978@gmail.com": {
-        "password": "admin",
-        "role": "user",
-        "name": "Usuario de prueba"
-    }
+_RUNTIME_PASSWORDS={}
+DEFAULT_USERS={
+ "javier.salvador@lenze.com":{"password":"admin","role":"admin","name":"Javier Salvador"},
+ "javisalvador1978@gmail.com":{"password":"admin","role":"user","name":"Usuario de prueba"}
 }
 
-
 def load_users():
-    raw = os.getenv("MB_USERS_JSON", "").strip()
-    if not raw:
-        return DEFAULT_USERS, True
-
-    try:
-        data = json.loads(raw)
-    except Exception as error:
-        raise RuntimeError("MB_USERS_JSON no contiene un JSON válido: " + str(error))
-
-    if not isinstance(data, dict):
-        raise RuntimeError("MB_USERS_JSON debe ser un objeto JSON de usuarios.")
-
-    normalized = {}
-    for email, profile in data.items():
-        if not isinstance(profile, dict):
-            continue
-        normalized[str(email).strip().lower()] = {
-            "password": str(profile.get("password", "")),
-            "role": str(profile.get("role", "user")),
-            "name": str(profile.get("name", email))
-        }
-    return normalized, False
-
+    raw=os.getenv("MB_USERS_JSON","").strip()
+    if not raw: return DEFAULT_USERS,True
+    data=json.loads(raw)
+    return {str(k).strip().lower():{"password":str(v.get("password","")),"role":str(v.get("role","user")),"name":str(v.get("name",k))} for k,v in data.items() if isinstance(v,dict)},False
 
 def init_auth_state():
-    st.session_state.setdefault("authenticated", False)
-    st.session_state.setdefault("user_email", "")
-    st.session_state.setdefault("user_role", "")
-    st.session_state.setdefault("user_name", "")
-    st.session_state.setdefault("language", "ES")
+    for k,v in {"authenticated":False,"user_email":"","user_role":"","user_name":"","language":"ES"}.items(): st.session_state.setdefault(k,v)
 
-
-def authenticate(email, password):
-    users, using_defaults = load_users()
-    key = str(email).strip().lower()
-    profile = users.get(key)
-    if not profile:
-        return False, using_defaults
-
-    expected_password = _RUNTIME_PASSWORDS.get(
-        key,
-        str(profile.get("password", ""))
-    )
-    valid = hmac.compare_digest(str(password), expected_password)
-    if not valid:
-        return False, using_defaults
-
-    st.session_state.authenticated = True
-    st.session_state.user_email = key
-    st.session_state.user_role = profile.get("role", "user")
-    st.session_state.user_name = profile.get("name", key)
-    return True, using_defaults
-
+def authenticate(email,password):
+    users,defaults=load_users(); key=str(email).strip().lower(); profile=users.get(key)
+    if not profile: return False,defaults
+    expected=_RUNTIME_PASSWORDS.get(key,str(profile.get("password","")))
+    if not hmac.compare_digest(str(password),expected): return False,defaults
+    st.session_state.authenticated=True; st.session_state.user_email=key
+    st.session_state.user_role=profile.get("role","user"); st.session_state.user_name=profile.get("name",key)
+    return True,defaults
 
 def logout():
-    for key in ("authenticated", "user_email", "user_role", "user_name"):
-        st.session_state[key] = False if key == "authenticated" else ""
+    st.session_state.authenticated=False
+    for k in ("user_email","user_role","user_name"): st.session_state[k]=""
     st.rerun()
 
-
-def render_login(t, logo_path=None):
-    init_auth_state()
-    left, center, right = st.columns([1, 1.25, 1])
-    with center:
-        if logo_path and logo_path.exists():
-            st.image(str(logo_path), use_container_width=True)
-        st.title(t("login_title"))
-        with st.form("login_form"):
-            email = st.text_input(t("email"))
-            password = st.text_input(t("password"), type="password")
-            submitted = st.form_submit_button(
-                t("sign_in"),
-                use_container_width=True,
-                type="primary"
-            )
-        if submitted:
-            ok, using_defaults = authenticate(email, password)
-            if ok:
-                st.rerun()
-            else:
-                st.error(t("invalid_login"))
-        _, using_defaults = load_users()
-        if using_defaults:
-            st.warning(t("default_credentials_warning"))
-
-
-# Contraseñas modificadas durante la ejecución actual del servicio.
-# Para persistencia tras reinicios, actualiza MB_USERS_JSON en Railway.
-_RUNTIME_PASSWORDS = {}
-
-
-def verify_current_password(email, password):
-    users, _ = load_users()
-    key = str(email).strip().lower()
-    expected = _RUNTIME_PASSWORDS.get(
-        key,
-        str(users.get(key, {}).get("password", ""))
-    )
-    return bool(expected) and hmac.compare_digest(str(password), expected)
-
-
-def change_password(email, current_password, new_password):
-    key = str(email).strip().lower()
-    if not verify_current_password(key, current_password):
-        return False, "La contraseña actual no es correcta."
-    if len(str(new_password)) < 8:
-        return False, "La nueva contraseña debe tener al menos 8 caracteres."
-    if str(new_password) == str(current_password):
-        return False, "La nueva contraseña debe ser diferente de la actual."
-    _RUNTIME_PASSWORDS[key] = str(new_password)
-    return True, "Contraseña modificada para la sesión actual del servicio."
+def change_password(email,current,new):
+    users,_=load_users(); key=str(email).strip().lower(); profile=users.get(key,{})
+    expected=_RUNTIME_PASSWORDS.get(key,str(profile.get("password","")))
+    if not hmac.compare_digest(str(current),expected): return False,"La contraseña actual no es correcta."
+    if len(str(new))<8: return False,"La nueva contraseña debe tener al menos 8 caracteres."
+    if str(new)==str(current): return False,"La nueva contraseña debe ser diferente."
+    _RUNTIME_PASSWORDS[key]=str(new); return True,"Contraseña modificada correctamente."
