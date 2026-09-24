@@ -84,9 +84,6 @@ TEXTS = {
 }
 
 
-for _language, _values in TRANSLATIONS.items():
-    TEXTS.setdefault(_language, {}).update(_values)
-
 def t(key):
     language = st.session_state.get("language", "ES")
     return TEXTS.get(language, TEXTS["ES"]).get(key, key)
