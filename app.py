@@ -83,14 +83,9 @@ TEXTS = {
     }
 }
 
-
 def t(key):
     language = st.session_state.get("language", "ES")
     return TEXTS.get(language, TEXTS["ES"]).get(key, key)
-
-
-
-
 
 def calculate_feed_constant(kinematics, parameter_1, parameter_2=0.0):
     import math
