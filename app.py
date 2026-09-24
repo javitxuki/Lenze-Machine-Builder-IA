@@ -92,33 +92,302 @@ def t(key):
 init_auth_state()
 LOGO_PATH = Path(__file__).resolve().parent / "Lenze.png"
 
-# Selector de idioma disponible también antes del login.
-language_col, spacer_col = st.columns([1, 5])
-with language_col:
-    st.selectbox(
-        "Language / Idioma",
-        ["ES", "EN"],
-        key="language"
-    )
+# Selector compacto visible antes del login.
+login_language = st.selectbox(
+    "Language / Idioma",
+    ["🇪🇸 ES", "🇬🇧 EN"],
+    index=0 if st.session_state.get("language", "ES") == "ES" else 1,
+    key="login_language_selector"
+)
+login_language_code = "ES" if login_language.endswith("ES") else "EN"
+if login_language_code != st.session_state.get("language", "ES"):
+    st.session_state.language = login_language_code
+    st.rerun()
 
 if not st.session_state.authenticated:
     render_login(t, LOGO_PATH)
     st.stop()
 
 
-st.set_page_config(page_title="Lenze Machine Builder Web",page_icon="⚙️",layout="wide")
-header_logo, header_title, header_user = st.columns([1, 4, 2])
-with header_logo:
+def render_corporate_header():
+    import base64
+
+    logo_html = ""
     if LOGO_PATH.exists():
-        st.image(str(LOGO_PATH), use_container_width=True)
-with header_title:
-    st.title(t("app_title"))
-    st.caption(t("app_caption"))
-with header_user:
-    st.write("**{0}:** {1}".format(t("user"), st.session_state.user_email))
-    st.write("**{0}:** {1}".format(t("role"), st.session_state.user_role))
-    if st.button(t("logout"), use_container_width=True):
-        logout()
+        encoded = base64.b64encode(LOGO_PATH.read_bytes()).decode("ascii")
+        suffix = LOGO_PATH.suffix.lower().replace(".", "") or "png"
+        logo_html = (
+            '<img alt="Lenze" src="data:image/{0};base64,{1}">'.format(
+                suffix,
+                encoded
+            )
+        )
+    else:
+        logo_html = '<strong style="color:#3155f5;font-size:24px">Lenze</strong>'
+
+    st.markdown(
+        '''<div class="lenze-shell-header">
+            <div class="lenze-brand-area">
+                <div class="lenze-logo-wrap">{logo}</div>
+                <div class="lenze-product-title">
+                    <strong>{title}</strong>
+                    <span>{subtitle}</span>
+                </div>
+            </div>
+        </div>'''.format(
+            logo=logo_html,
+            title=t("app_title"),
+            subtitle=t("app_caption")
+        ),
+        unsafe_allow_html=True
+    )
+
+    lang_col, space_col, avatar_col, logout_col = st.columns([1.1, 4.6, 2.2, 1.1])
+
+    with lang_col:
+        current = st.session_state.get("language", "ES")
+        language_label = st.selectbox(
+            t("language"),
+            ["🇪🇸 ES", "🇬🇧 EN"],
+            index=0 if current == "ES" else 1,
+            key="corporate_language_selector",
+            label_visibility="collapsed"
+        )
+        requested_language = "ES" if language_label.endswith("ES") else "EN"
+        if requested_language != current:
+            st.session_state.language = requested_language
+            st.rerun()
+
+    with avatar_col:
+        display_name = st.session_state.get("user_name") or st.session_state.get("user_email", "")
+        email = st.session_state.get("user_email", "")
+        role = st.session_state.get("user_role", "user")
+        initials = "".join(
+            part[0].upper()
+            for part in display_name.replace("@", " ").split()
+            if part
+        )[:2] or "US"
+
+        st.markdown(
+            '''<div style="display:flex;justify-content:flex-end;align-items:center;gap:9px">
+                <div style="width:34px;height:34px;border-radius:50%;background:#3155f5;
+                            color:white;display:flex;align-items:center;justify-content:center;
+                            font-weight:700;font-size:12px">{initials}</div>
+                <div class="lenze-user-summary">
+                    <div class="name">{name}</div>
+                    <div class="mail">{email}</div>
+                    <span class="lenze-role-pill">{role}</span>
+                </div>
+            </div>'''.format(
+                initials=initials,
+                name=display_name,
+                email=email,
+                role=role
+            ),
+            unsafe_allow_html=True
+        )
+
+    with logout_col:
+        if st.button("↪ " + t("logout"), use_container_width=True):
+            logout()
+
+
+
+st.set_page_config(page_title="Lenze Machine Builder Web",page_icon="⚙️",layout="wide")
+
+# ---- LENZE CORPORATE UI ------------------------------------------------------
+st.markdown("""
+<style>
+:root {
+    --lenze-blue: #3155f5;
+    --lenze-blue-dark: #1f3fc7;
+    --lenze-navy: #14213d;
+    --lenze-text: #273248;
+    --lenze-muted: #667085;
+    --lenze-border: #d8dee9;
+    --lenze-bg: #f4f6f9;
+    --lenze-card: #ffffff;
+}
+
+html, body, [data-testid="stAppViewContainer"] {
+    background: var(--lenze-bg);
+    color: var(--lenze-text);
+}
+
+[data-testid="stHeader"], #MainMenu, footer {
+    display: none;
+}
+
+[data-testid="stAppViewBlockContainer"] {
+    padding-top: 0.65rem;
+    padding-bottom: 3rem;
+    max-width: 1220px;
+}
+
+.block-container {
+    padding-top: 0.65rem !important;
+    max-width: 1220px !important;
+}
+
+/* Cabecera */
+.lenze-shell-header {
+    background: #ffffff;
+    min-height: 68px;
+    padding: 0 16px;
+    border-bottom: 3px solid var(--lenze-blue);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    margin-bottom: 28px;
+}
+
+.lenze-brand-area {
+    display: flex;
+    align-items: center;
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+.lenze-logo-wrap {
+    width: 128px;
+    min-width: 128px;
+    display: flex;
+    align-items: center;
+}
+
+.lenze-logo-wrap img {
+    width: 122px;
+    max-height: 44px;
+    object-fit: contain;
+}
+
+.lenze-product-title {
+    margin-left: 18px;
+    padding-left: 18px;
+    border-left: 1px solid #d6dbe6;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.lenze-product-title strong {
+    display: block;
+    color: var(--lenze-navy);
+    font-size: 17px;
+    font-weight: 650;
+    line-height: 1.2;
+}
+
+.lenze-product-title span {
+    color: var(--lenze-muted);
+    font-size: 12.5px;
+}
+
+/* Tarjetas y controles */
+[data-testid="stVerticalBlockBorderWrapper"] {
+    border: 1px solid var(--lenze-border) !important;
+    border-radius: 13px !important;
+    background: var(--lenze-card) !important;
+    box-shadow: 0 2px 8px rgba(22, 34, 58, 0.05);
+}
+
+[data-testid="stExpander"] {
+    border: 1px solid var(--lenze-border) !important;
+    border-radius: 12px !important;
+    background: white !important;
+    box-shadow: 0 2px 7px rgba(22, 34, 58, 0.045);
+    overflow: hidden;
+}
+
+[data-testid="stExpander"] summary {
+    font-weight: 650;
+    color: var(--lenze-navy);
+}
+
+h1, h2, h3 {
+    color: var(--lenze-navy) !important;
+    letter-spacing: -0.015em;
+}
+
+h1 { font-size: 1.78rem !important; }
+h2 { font-size: 1.34rem !important; }
+h3 { font-size: 1.08rem !important; }
+
+.stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] button {
+    border-radius: 8px !important;
+    font-weight: 600 !important;
+    min-height: 38px;
+}
+
+.stButton > button[kind="primary"],
+.stDownloadButton > button[kind="primary"],
+[data-testid="stFormSubmitButton"] button[kind="primary"] {
+    background: var(--lenze-blue) !important;
+    border-color: var(--lenze-blue) !important;
+}
+
+.stButton > button:hover, .stDownloadButton > button:hover {
+    border-color: var(--lenze-blue) !important;
+    color: var(--lenze-blue) !important;
+}
+
+[data-baseweb="input"] > div,
+[data-baseweb="select"] > div,
+[data-testid="stFileUploaderDropzone"] {
+    border-radius: 8px !important;
+}
+
+/* Barra derecha de usuario */
+.lenze-user-summary {
+    text-align: right;
+    line-height: 1.15;
+    margin-top: 6px;
+}
+
+.lenze-user-summary .name {
+    color: var(--lenze-navy);
+    font-weight: 650;
+    font-size: 14px;
+}
+
+.lenze-user-summary .mail {
+    color: var(--lenze-muted);
+    font-size: 11px;
+}
+
+.lenze-role-pill {
+    display: inline-block;
+    margin-top: 4px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #edf1ff;
+    color: var(--lenze-blue-dark);
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+}
+
+/* Login */
+.lenze-login-title {
+    text-align: center;
+    margin-top: 6px;
+    margin-bottom: 18px;
+}
+
+@media (max-width: 760px) {
+    .lenze-shell-header { padding: 0 8px; }
+    .lenze-logo-wrap { width: 94px; min-width: 94px; }
+    .lenze-logo-wrap img { width: 90px; }
+    .lenze-product-title { margin-left: 8px; padding-left: 8px; }
+    .lenze-product-title span { display: none; }
+    .lenze-product-title strong { font-size: 14px; }
+}
+</style>
+""", unsafe_allow_html=True)
+# -----------------------------------------------------------------------------
+
+render_corporate_header()
 
 @st.cache_data
 def repo_data(): return load_repository()
