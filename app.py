@@ -25,7 +25,12 @@ st.markdown(
     --lenze-bg: #f4f6f9;
 }
 [data-testid="stHeader"], #MainMenu, footer { display: none; }
-.block-container { padding-top: .7rem !important; max-width: 98% !important; }
+.block-container {
+    padding-top: .5rem !important;
+    max-width: 99.5% !important;
+    padding-left: 0.7rem !important;
+    padding-right: 0.7rem !important;
+}
 [data-testid="stAppViewContainer"] { background: var(--lenze-bg); }
 .lenze-head {
     background: #fff;
@@ -47,6 +52,96 @@ st.markdown(
     border-radius: 12px !important;
 }
 .stButton button, .stDownloadButton button { border-radius: 8px; font-weight: 600; }
+/* ==========================================================
+   RESPONSIVE DESIGN
+   ========================================================== */
+
+/* Tablets */
+@media (max-width: 1200px) {
+
+    .block-container {
+        max-width: 100% !important;
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+    }
+
+}
+
+/* Móviles */
+@media (max-width: 768px) {
+
+    .block-container {
+        max-width: 100% !important;
+        padding-left: 0.35rem !important;
+        padding-right: 0.35rem !important;
+    }
+
+    .lenze-head {
+
+        flex-direction: column !important;
+
+        align-items: flex-start !important;
+
+        gap: 8px !important;
+
+        padding: 10px !important;
+    }
+
+    .lenze-head img {
+
+        width: 100px !important;
+        max-height: 36px !important;
+    }
+
+    .lenze-title {
+
+        border-left: none !important;
+
+        padding-left: 0 !important;
+    }
+
+    .lenze-title b {
+
+        font-size: 18px !important;
+    }
+
+    .lenze-title span {
+
+        font-size: 11px !important;
+    }
+
+    /* Hace que las columnas de Streamlit se apilen verticalmente */
+
+    [data-testid="column"] {
+
+        width: 100% !important;
+
+        min-width: 100% !important;
+
+        flex: 1 1 100% !important;
+
+        margin-bottom: 0.35rem !important;
+    }
+
+    /* Selectores y entradas ocupan todo el ancho */
+
+    [data-baseweb="input"],
+    [data-baseweb="select"] {
+
+        width: 100% !important;
+    }
+
+    .stButton button,
+    .stDownloadButton button {
+
+        width: 100% !important;
+    }
+
+    [data-testid="stExpander"] {
+
+        overflow: visible !important;
+    }
+}
 </style>
 """,
     unsafe_allow_html=True,
