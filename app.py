@@ -3,7 +3,7 @@ from pathlib import Path
 import streamlit as st
 from machine_builder_core import *
 
-from auth import init_auth_state, render_login, logout, change_password
+from auth import init_auth_state, render_login, logout, change_password, change_password
 
 
 TEXTS = {
@@ -159,20 +159,138 @@ def render_user_menu():
             if st.button(t("logout"), use_container_width=True, type="primary"):
                 logout()
 
+
+
+FINAL_UI_TEXTS = {
+    "ES": {
+        "user_options": "Opciones de usuario",
+        "change_password": "Cambiar contraseña",
+        "current_password": "Contraseña actual",
+        "new_password": "Nueva contraseña",
+        "repeat_password": "Repetir nueva contraseña",
+        "save_password": "Guardar contraseña",
+        "passwords_do_not_match": "Las contraseñas nuevas no coinciden.",
+        "password_saved": "Contraseña modificada correctamente.",
+        "password_persistence": "Para conservar el cambio tras reiniciar o redesplegar Railway, actualiza MB_USERS_JSON.",
+        "feed_calculator": "Calcular Feed Constant",
+        "calculate": "Calcular",
+        "lead_pitch": "Paso del husillo [mm/vuelta]",
+        "pulley_pitch_diameter": "Diámetro primitivo de polea [mm]",
+        "pinion_pitch_diameter": "Diámetro primitivo de piñón [mm]",
+        "calculated_feed": "Feed Constant calculado"
+    },
+    "EN": {
+        "user_options": "User options",
+        "change_password": "Change password",
+        "current_password": "Current password",
+        "new_password": "New password",
+        "repeat_password": "Repeat new password",
+        "save_password": "Save password",
+        "passwords_do_not_match": "The new passwords do not match.",
+        "password_saved": "Password changed successfully.",
+        "password_persistence": "To preserve the change after restarting or redeploying Railway, update MB_USERS_JSON.",
+        "feed_calculator": "Calculate Feed Constant",
+        "calculate": "Calculate",
+        "lead_pitch": "Lead screw pitch [mm/revolution]",
+        "pulley_pitch_diameter": "Pulley pitch diameter [mm]",
+        "pinion_pitch_diameter": "Pinion pitch diameter [mm]",
+        "calculated_feed": "Calculated Feed Constant"
+    }
+}
+
+for _language, _content in FINAL_UI_TEXTS.items():
+    TEXTS.setdefault(_language, {}).update(_content)
+
+
+def calculate_feed_constant(kinematics, value):
+    import math
+    mode = str(kinematics).strip().upper()
+    numeric = float(str(value).strip().replace(",", "."))
+    if numeric <= 0:
+        raise ValueError("El valor debe ser mayor que cero.")
+
+    if mode == "ROTARY":
+        return 360.0
+    if mode == "LEADSCREW":
+        return numeric
+    if mode in ("BELT", "RACK_PINION"):
+        return math.pi * numeric
+    raise ValueError("Kinematics no reconocida: " + mode)
+
+
+def format_feed_constant(value):
+    text = "{0:.12f}".format(float(value)).rstrip("0").rstrip(".")
+    return text if "." in text else text + ".0"
+
+
+def render_language_flag_selector():
+    current = st.session_state.get("language", "ES")
+    selected = st.selectbox(
+        "Idioma / Language",
+        ["🇪🇸", "🇬🇧"],
+        index=0 if current == "ES" else 1,
+        key="final_language_flag_selector",
+        label_visibility="collapsed"
+    )
+    requested = "ES" if selected == "🇪🇸" else "EN"
+    if requested != current:
+        st.session_state.language = requested
+        st.rerun()
+
+
+def render_user_dropdown():
+    display_name = (
+        st.session_state.get("user_name")
+        or st.session_state.get("user_email", "Usuario")
+    )
+    initials = "".join(
+        part[0].upper()
+        for part in display_name.replace("@", " ").split()
+        if part
+    )[:2] or "US"
+
+    with st.popover("{0}  {1}  ▾".format(initials, display_name), use_container_width=True):
+        st.caption(st.session_state.get("user_email", ""))
+        st.caption("{0}: {1}".format(t("role"), st.session_state.get("user_role", "user")))
+
+        option = st.selectbox(
+            t("user_options"),
+            [t("change_password"), t("logout")],
+            key="final_user_action",
+            label_visibility="collapsed"
+        )
+
+        if option == t("change_password"):
+            with st.form("final_change_password_form", clear_on_submit=True):
+                current_password = st.text_input(t("current_password"), type="password")
+                new_password = st.text_input(t("new_password"), type="password")
+                repeat_password = st.text_input(t("repeat_password"), type="password")
+                submitted = st.form_submit_button(
+                    t("save_password"),
+                    use_container_width=True,
+                    type="primary"
+                )
+
+            if submitted:
+                if new_password != repeat_password:
+                    st.error(t("passwords_do_not_match"))
+                else:
+                    ok, message = change_password(
+                        st.session_state.user_email,
+                        current_password,
+                        new_password
+                    )
+                    if ok:
+                        st.success(t("password_saved"))
+                        st.info(t("password_persistence"))
+                    else:
+                        st.error(message)
+        else:
+            if st.button(t("logout"), key="final_logout", use_container_width=True, type="primary"):
+                logout()
+
 init_auth_state()
 LOGO_PATH = Path(__file__).resolve().parent / "Lenze.png"
-
-# Selector compacto visible antes del login.
-login_language = st.selectbox(
-    "Language / Idioma",
-    ["🇪🇸 ES", "🇬🇧 EN"],
-    index=0 if st.session_state.get("language", "ES") == "ES" else 1,
-    key="login_language_selector"
-)
-login_language_code = "ES" if login_language.endswith("ES") else "EN"
-if login_language_code != st.session_state.get("language", "ES"):
-    st.session_state.language = login_language_code
-    st.rerun()
 
 if not st.session_state.authenticated:
     render_login(t, LOGO_PATH)
@@ -215,248 +333,11 @@ def render_corporate_header():
     lang_col, space_col, avatar_col, logout_col = st.columns([1.1, 4.6, 2.2, 1.1])
 
     with lang_col:
-        current = st.session_state.get("language", "ES")
-        language_label = st.selectbox(
-            t("language"),
-            ["🇪🇸 ES", "🇬🇧 EN"],
-            index=0 if current == "ES" else 1,
-            key="corporate_language_selector",
-            label_visibility="collapsed"
-        )
-        requested_language = "ES" if language_label.endswith("ES") else "EN"
-        if requested_language != current:
-            st.session_state.language = requested_language
-            st.rerun()
+        render_language_flag_selector()
 
     with avatar_col:
-        display_name = st.session_state.get("user_name") or st.session_state.get("user_email", "")
-        email = st.session_state.get("user_email", "")
-        role = st.session_state.get("user_role", "user")
-        initials = "".join(
-            part[0].upper()
-            for part in display_name.replace("@", " ").split()
-            if part
-        )[:2] or "US"
+        render_user_dropdown()
 
-        st.markdown(
-            '''<div style="display:flex;justify-content:flex-end;align-items:center;gap:9px">
-                <div style="width:34px;height:34px;border-radius:50%;background:#3155f5;
-                            color:white;display:flex;align-items:center;justify-content:center;
-                            font-weight:700;font-size:12px">{initials}</div>
-                <div class="lenze-user-summary">
-                    <div class="name">{name}</div>
-                    <div class="mail">{email}</div>
-                    <span class="lenze-role-pill">{role}</span>
-                </div>
-            </div>'''.format(
-                initials=initials,
-                name=display_name,
-                email=email,
-                role=role
-            ),
-            unsafe_allow_html=True
-        )
-
-    with logout_col:
-        render_user_menu()
-
-
-
-st.set_page_config(page_title="Lenze Machine Builder Web",page_icon="⚙️",layout="wide")
-
-# ---- LENZE CORPORATE UI ------------------------------------------------------
-st.markdown("""
-<style>
-:root {
-    --lenze-blue: #3155f5;
-    --lenze-blue-dark: #1f3fc7;
-    --lenze-navy: #14213d;
-    --lenze-text: #273248;
-    --lenze-muted: #667085;
-    --lenze-border: #d8dee9;
-    --lenze-bg: #f4f6f9;
-    --lenze-card: #ffffff;
-}
-
-html, body, [data-testid="stAppViewContainer"] {
-    background: var(--lenze-bg);
-    color: var(--lenze-text);
-}
-
-[data-testid="stHeader"], #MainMenu, footer {
-    display: none;
-}
-
-[data-testid="stAppViewBlockContainer"] {
-    padding-top: 0.65rem;
-    padding-bottom: 3rem;
-    max-width: 1220px;
-}
-
-.block-container {
-    padding-top: 0.65rem !important;
-    max-width: 1220px !important;
-}
-
-/* Cabecera */
-.lenze-shell-header {
-    background: #ffffff;
-    min-height: 68px;
-    padding: 0 16px;
-    border-bottom: 3px solid var(--lenze-blue);
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 18px;
-    margin-bottom: 28px;
-}
-
-.lenze-brand-area {
-    display: flex;
-    align-items: center;
-    min-width: 0;
-    flex: 1 1 auto;
-}
-
-.lenze-logo-wrap {
-    width: 128px;
-    min-width: 128px;
-    display: flex;
-    align-items: center;
-}
-
-.lenze-logo-wrap img {
-    width: 122px;
-    max-height: 44px;
-    object-fit: contain;
-}
-
-.lenze-product-title {
-    margin-left: 18px;
-    padding-left: 18px;
-    border-left: 1px solid #d6dbe6;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-}
-
-.lenze-product-title strong {
-    display: block;
-    color: var(--lenze-navy);
-    font-size: 17px;
-    font-weight: 650;
-    line-height: 1.2;
-}
-
-.lenze-product-title span {
-    color: var(--lenze-muted);
-    font-size: 12.5px;
-}
-
-/* Tarjetas y controles */
-[data-testid="stVerticalBlockBorderWrapper"] {
-    border: 1px solid var(--lenze-border) !important;
-    border-radius: 13px !important;
-    background: var(--lenze-card) !important;
-    box-shadow: 0 2px 8px rgba(22, 34, 58, 0.05);
-}
-
-[data-testid="stExpander"] {
-    border: 1px solid var(--lenze-border) !important;
-    border-radius: 12px !important;
-    background: white !important;
-    box-shadow: 0 2px 7px rgba(22, 34, 58, 0.045);
-    overflow: hidden;
-}
-
-[data-testid="stExpander"] summary {
-    font-weight: 650;
-    color: var(--lenze-navy);
-}
-
-h1, h2, h3 {
-    color: var(--lenze-navy) !important;
-    letter-spacing: -0.015em;
-}
-
-h1 { font-size: 1.78rem !important; }
-h2 { font-size: 1.34rem !important; }
-h3 { font-size: 1.08rem !important; }
-
-.stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] button {
-    border-radius: 8px !important;
-    font-weight: 600 !important;
-    min-height: 38px;
-}
-
-.stButton > button[kind="primary"],
-.stDownloadButton > button[kind="primary"],
-[data-testid="stFormSubmitButton"] button[kind="primary"] {
-    background: var(--lenze-blue) !important;
-    border-color: var(--lenze-blue) !important;
-}
-
-.stButton > button:hover, .stDownloadButton > button:hover {
-    border-color: var(--lenze-blue) !important;
-    color: var(--lenze-blue) !important;
-}
-
-[data-baseweb="input"] > div,
-[data-baseweb="select"] > div,
-[data-testid="stFileUploaderDropzone"] {
-    border-radius: 8px !important;
-}
-
-/* Barra derecha de usuario */
-.lenze-user-summary {
-    text-align: right;
-    line-height: 1.15;
-    margin-top: 6px;
-}
-
-.lenze-user-summary .name {
-    color: var(--lenze-navy);
-    font-weight: 650;
-    font-size: 14px;
-}
-
-.lenze-user-summary .mail {
-    color: var(--lenze-muted);
-    font-size: 11px;
-}
-
-.lenze-role-pill {
-    display: inline-block;
-    margin-top: 4px;
-    padding: 2px 8px;
-    border-radius: 999px;
-    background: #edf1ff;
-    color: var(--lenze-blue-dark);
-    font-size: 10.5px;
-    font-weight: 700;
-    text-transform: uppercase;
-}
-
-/* Login */
-.lenze-login-title {
-    text-align: center;
-    margin-top: 6px;
-    margin-bottom: 18px;
-}
-
-@media (max-width: 760px) {
-    .lenze-shell-header { padding: 0 8px; }
-    .lenze-logo-wrap { width: 94px; min-width: 94px; }
-    .lenze-logo-wrap img { width: 90px; }
-    .lenze-product-title { margin-left: 8px; padding-left: 8px; }
-    .lenze-product-title span { display: none; }
-    .lenze-product-title strong { font-size: 14px; }
-}
-</style>
-""", unsafe_allow_html=True)
-# -----------------------------------------------------------------------------
-
-render_corporate_header()
 
 @st.cache_data
 def repo_data(): return load_repository()
@@ -523,28 +404,39 @@ for i,a in enumerate(st.session_state.axes):
         with c3.popover("🧮 " + t("feed_calculator"), use_container_width=True):
             calc_mode=a["kinematics"]
             if calc_mode=="ROTARY":
-                st.info("360° / revolution")
-                calc_p1=360.0
-                calc_p2=0.0
+                calculator_label="360° / revolution"
+                calculator_value=360.0
+                st.info(calculator_label)
             elif calc_mode=="LEADSCREW":
-                calc_p1=st.number_input(t("lead_pitch"),min_value=0.000001,value=10.0,key=f"calc_p1_{i}")
-                calc_p2=0.0
+                calculator_value=st.number_input(
+                    t("lead_pitch"), min_value=0.000001, value=10.0,
+                    key=f"final_feed_value_{i}"
+                )
             elif calc_mode=="BELT":
-                calc_p1=st.number_input(t("pulley_diameter"),min_value=0.000001,value=100.0,key=f"calc_p1_{i}")
-                calc_p2=0.0
+                calculator_value=st.number_input(
+                    t("pulley_pitch_diameter"), min_value=0.000001, value=100.0,
+                    key=f"final_feed_value_{i}"
+                )
             else:
-                calc_p1=st.number_input(t("rack_module"),min_value=0.000001,value=2.0,key=f"calc_p1_{i}")
-                calc_p2=st.number_input(t("pinion_teeth"),min_value=1,value=20,key=f"calc_p2_{i}")
+                calculator_value=st.number_input(
+                    t("pinion_pitch_diameter"), min_value=0.000001, value=100.0,
+                    key=f"final_feed_value_{i}"
+                )
 
-            if st.button(t("calculate"),key=f"calculate_feed_{i}",use_container_width=True,type="primary"):
-                result=calculate_feed_constant(calc_mode,calc_p1,calc_p2)
-                st.session_state[feed_key]=format_decimal(result)
+            if st.button(
+                t("calculate"), key=f"final_calculate_feed_{i}",
+                use_container_width=True, type="primary"
+            ):
+                result=calculate_feed_constant(calc_mode,calculator_value)
+                st.session_state[feed_key]=format_feed_constant(result)
                 a["feed_constant"]=st.session_state[feed_key]
                 st.success(t("calculated_feed") + ": " + st.session_state[feed_key])
                 st.rerun()
 
         if a["kinematics"]=="ROTARY":
-            a["cycle_length"]=c2.text_input(t("cycle_length"),str(a.get("cycle_length",360.0)),key=f"cycle{i}")
+            a["cycle_length"]=c2.text_input(
+                t("cycle_length"),str(a.get("cycle_length",360.0)),key=f"cycle{i}"
+            )
         else:
             a["cycle_length"]=0.0
 
