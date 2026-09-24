@@ -409,6 +409,7 @@ def render_machine_assistant():
         if prompt:
             st.session_state.assistant_messages.append({"role": "user", "content": prompt})
             proposal = ai_interpret(prompt, st.session_state.axes)
+            st.write(proposal)
             st.session_state.assistant_proposal = proposal
             response = "**Propuesta preparada**\n\n" + proposal.get("summary", "")
             st.session_state.assistant_messages.append({"role": "assistant", "content": response})
