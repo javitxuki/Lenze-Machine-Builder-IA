@@ -54,14 +54,74 @@ def cpu_options(repo, model):
     values=[d for d in _devices(repo) if str(d.get("name","")).lower()==exact]
     return sorted(values,key=lambda d:version_key(d.get("version","")), reverse=True)
 
+VALID_ETHERCAT_MASTER_VERSIONS = {
+    "3.0.0.10",
+    "3.1.0.0",
+    "3.2.0.0",
+    "3.3.0.0",
+    "3.4.0.0",
+    "3.6.0.0",
+    "3.9.0.0",
+    "3.10.0.1",
+    "3.12.0.1",
+    "3.14.0.0",
+    "3.14.0.1",
+    "3.15.0.0",
+    "3.15.0.1",
+    "3.16.0.0",
+    "3.17.0.0",
+    "3.18.0.0",
+    "3.18.1.0",
+    "3.18.2.0",
+    "3.18.3.0",
+    "3.18.4.0",
+    "3.28.0.0",
+    "3.32.0.1",
+}
 
 def master_options(repo):
-    vals=[]
+
+    vals = []
+
     for d in _devices(repo):
-        n=str(d.get("name","")).lower(); did=str(d.get("device_id",d.get("type","")))
-        if "ethercat master" in n and "slave" not in n:
-            vals.append({**d,"device_id":did})
-    return sorted(vals,key=lambda d:version_key(d.get("version","")), reverse=True)
+
+        name = str(
+            d.get("name", "")
+        )
+
+        version = str(
+            d.get("version", "")
+        )
+
+        did = str(
+            d.get(
+                "device_id",
+                d.get("type", "")
+            )
+        )
+
+        if "ethercat master" not in name.lower():
+            continue
+
+        if "slave" in name.lower():
+            continue
+
+        if version not in VALID_ETHERCAT_MASTER_VERSIONS:
+            continue
+
+        vals.append({
+            **d,
+            "device_id": did
+        })
+
+    return sorted(
+        vals,
+        key=lambda d:
+            version_key(
+                d.get("version", "")
+            ),
+        reverse=True
+    )
 
 
 def drive_options(repo, drive, safety="Basic Safety", i950_variant="Normal"):
