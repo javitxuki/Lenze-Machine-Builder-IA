@@ -359,6 +359,88 @@ def request_feed_update(axis_index, result):
     ] = formatted
 
 
+
+
+# ================= MACHINE BUILDER ASSISTANT =================
+from ai_assistant import interpret as ai_interpret, transcribe_audio as ai_transcribe_audio
+
+
+def clear_axis_widget_state():
+    prefixes = (
+        "feed_widget_", "kp", "cycle", "en", "name", "drv", "safe",
+        "i950", "desc", "alias", "c86", "kin", "traversing", "z1_", "z2_", "z3_", "z4_"
+    )
+    for key in list(st.session_state.keys()):
+        if str(key).startswith(prefixes):
+            del st.session_state[key]
+
+
+def render_machine_assistant():
+    st.session_state.setdefault("assistant_messages", [])
+    st.session_state.setdefault("assistant_proposal", None)
+    st.session_state.setdefault("last_audio_id", None)
+
+    with st.expander("💬 Asistente Machine Builder", expanded=False):
+        st.caption(
+            "Describe la máquina por escrito o voz. El asistente prepara una propuesta; "
+            "los campos solo cambian al pulsar Aplicar propuesta."
+        )
+
+        for message in st.session_state.assistant_messages[-8:]:
+            with st.chat_message(message["role"]):
+                st.markdown(message["content"])
+
+        prompt = st.chat_input(
+            "Ejemplo: 3 ejes; eje 1 i950 rotary; eje 2 belt 120; eje 3 leadscrew 10",
+            key="machine_assistant_chat"
+        )
+
+        audio = st.audio_input("🎤 Dictar configuración", sample_rate=16000, key="machine_assistant_audio")
+        if audio is not None:
+            audio_id = "{0}:{1}".format(getattr(audio, "name", "audio.wav"), len(audio.getvalue()))
+            if audio_id != st.session_state.last_audio_id:
+                st.session_state.last_audio_id = audio_id
+                try:
+                    prompt = ai_transcribe_audio(audio.getvalue(), getattr(audio, "name", "voice.wav"))
+                    st.info("Transcripción: " + prompt)
+                except Exception as error:
+                    st.error(str(error))
+
+        if prompt:
+            st.session_state.assistant_messages.append({"role": "user", "content": prompt})
+            proposal = ai_interpret(prompt, st.session_state.axes)
+            st.session_state.assistant_proposal = proposal
+            response = "**Propuesta preparada**\n\n" + proposal.get("summary", "")
+            st.session_state.assistant_messages.append({"role": "assistant", "content": response})
+            st.rerun()
+
+        proposal = st.session_state.assistant_proposal
+        if proposal:
+            st.markdown("#### Vista previa")
+            preview = []
+            for axis in proposal.get("axes", []):
+                preview.append({
+                    "Eje": axis.get("name"),
+                    "Drive": axis.get("drive_type"),
+                    "Safety": axis.get("safety_variant"),
+                    "Kinematics": axis.get("kinematics"),
+                    "Parámetro": axis.get("kinematic_parameter"),
+                    "Feed Constant": axis.get("feed_constant"),
+                    "Alias": axis.get("station_alias"),
+                })
+            st.dataframe(preview, use_container_width=True, hide_index=True)
+            apply_col, discard_col = st.columns(2)
+            if apply_col.button("✅ Aplicar propuesta", use_container_width=True, type="primary"):
+                st.session_state.axes = proposal["axes"]
+                clear_axis_widget_state()
+                st.session_state.assistant_proposal = None
+                st.session_state.assistant_messages.append({"role": "assistant", "content": "Configuración aplicada."})
+                st.rerun()
+            if discard_col.button("❌ Descartar", use_container_width=True):
+                st.session_state.assistant_proposal = None
+                st.rerun()
+# =============================================================
+
 init_auth_state()
 if not st.session_state.authenticated:
     login_view()
@@ -385,6 +467,8 @@ if "axes" not in st.session_state:
         )
         for index in range(1, 3)
     ]
+
+render_machine_assistant()
 
 with st.sidebar:
     st.header(t("config"))
