@@ -112,20 +112,32 @@ for i,a in enumerate(st.session_state.axes):
         opts=drive_options(repo,a["drive_type"],a["safety_variant"],a["i950_variant"]); labels=[f"{d['name']} [{d.get('version','')}]" for d in opts] or ["Sin descriptor"]
         dl=c2.selectbox(t("desc"),labels,key=f"desc{i}"); selected=opts[labels.index(dl)] if opts else {}; a["descriptor_label"]=dl; a["device_id"]=selected.get("device_id","")
         a["station_alias"]=c3.number_input("Alias",0,65535,int(a.get("station_alias",1001)),key=f"al{i}"); a["second_station_alias"]=c4.number_input(t("alias2"),0,65535,int(a.get("second_station_alias",2001)),key=f"al2{i}")
-        c1,c2,c3,c4=st.columns(4); a["motor_code_c86"]=c1.text_input("C86",a.get("motor_code_c86",""),key=f"c86{i}"); a["kinematics"]=c2.selectbox("Kinematics",KINEMATICS,index=KINEMATICS.index(a.get("kinematics","ROTARY")),key=f"kin{i}"); a["kinematic_parameter"]=c3.text_input(t("kin_param"),str(a.get("kinematic_parameter",360)),key=f"kp{i}"); a["traversing_range"]=c4.selectbox("Traversing Range",TRAVERSING,index=TRAVERSING.index(a.get("traversing_range","MODULO")),key=f"tr{i}")
+        c1,c2,c3,c4=st.columns(4)
+        a["motor_code_c86"]=c1.text_input("C86",a.get("motor_code_c86",""),key=f"c86{i}")
+        a["kinematics"]=c2.selectbox("Kinematics",KINEMATICS,index=KINEMATICS.index(a.get("kinematics","ROTARY")),key=f"kin{i}")
+        kp_key=f"kp{i}"
+        st.session_state.setdefault(kp_key,str(a.get("kinematic_parameter",360)))
+        a["kinematic_parameter"]=c3.text_input(t("kin_param"),key=kp_key)
+        a["traversing_range"]=c4.selectbox("Traversing Range",TRAVERSING,index=TRAVERSING.index(a.get("traversing_range","MODULO")),key=f"tr{i}")
         zcols=st.columns(4)
-        for col,z in zip(zcols,("z1","z2","z3","z4")): a[z]=col.number_input(z.upper(),1,1000000,int(a.get(z,1)),key=f"{z}{i}")
-        c1,c2,c3=st.columns(3); fkey=f"feed{i}"; st.session_state.setdefault(fkey,str(a.get("feed_constant",360))); a["feed_constant"]=c1.text_input(t("feed"),key=fkey)
-        if a["kinematics"]=="ROTARY": a["cycle_length"]=c2.text_input(t("cycle"),str(a.get("cycle_length",360)),key=f"cycle{i}")
-        else: a["cycle_length"]=0.0
-        with c3.popover("🧮 "+t("calc"),use_container_width=True):
-            mode=a["kinematics"]
-            if mode=="ROTARY": val=360.0; st.info("360° / revolution")
-            elif mode=="LEADSCREW": val=st.number_input(t("lead"),min_value=.000001,value=10.0,key=f"fv{i}")
-            elif mode=="BELT": val=st.number_input(t("pulley"),min_value=.000001,value=100.0,key=f"fv{i}")
-            else: val=st.number_input(t("pinion"),min_value=.000001,value=100.0,key=f"fv{i}")
-            if st.button(t("calculate"),key=f"fc{i}",use_container_width=True,type="primary"):
-                st.session_state[fkey]=fmt(feed_calc(mode,val)); st.rerun()
+        for col,z in zip(zcols,("z1","z2","z3","z4")):
+            a[z]=col.number_input(z.upper(),1,1000000,int(a.get(z,1)),key=f"{z}{i}")
+        c1,c2,c3=st.columns(3)
+        fkey=f"feed{i}"
+        st.session_state.setdefault(fkey,str(a.get("feed_constant",360)))
+        a["feed_constant"]=c1.text_input(t("feed"),key=fkey)
+        if a["kinematics"]=="ROTARY":
+            a["cycle_length"]=c2.text_input(t("cycle"),str(a.get("cycle_length",360)),key=f"cycle{i}")
+        else:
+            a["cycle_length"]=0.0
+        if c3.button("🧮 "+t("calc"),key=f"fc{i}",use_container_width=True,type="primary"):
+            try:
+                result=feed_calc(a["kinematics"],a["kinematic_parameter"])
+                st.session_state[fkey]=fmt(result)
+                a["feed_constant"]=st.session_state[fkey]
+                st.rerun()
+            except Exception as error:
+                st.error(str(error))
 cfg={"format":"LenzeMachineBuilderWeb","format_version":2,"cpu_model":cpu,"cpu_version":cpu_sel.get("version",""),"cpu_device_id":cpu_sel.get("device_id",cpu_sel.get("type","")),"ethercat_master_label":master_label,"ethercat_master_version":master_sel.get("version",""),"ethercat_master_device_id":master_sel.get("device_id",master_sel.get("type","")),"project_path":project_path,"axes":st.session_state.axes,"robot_groups":[]}
 errors=validate_config(cfg)
 if errors:
