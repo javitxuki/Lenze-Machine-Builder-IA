@@ -3,7 +3,7 @@ from pathlib import Path
 import streamlit as st
 from machine_builder_core import *
 
-from auth import init_auth_state, render_login, logout
+from auth import init_auth_state, render_login, logout, change_password
 
 
 TEXTS = {
@@ -84,10 +84,80 @@ TEXTS = {
 }
 
 
+for _language, _values in TRANSLATIONS.items():
+    TEXTS.setdefault(_language, {}).update(_values)
+
 def t(key):
     language = st.session_state.get("language", "ES")
     return TEXTS.get(language, TEXTS["ES"]).get(key, key)
 
+
+
+
+
+def calculate_feed_constant(kinematics, parameter_1, parameter_2=0.0):
+    import math
+    mode = str(kinematics).upper()
+    p1 = float(str(parameter_1).replace(",", "."))
+    p2 = float(str(parameter_2).replace(",", ".")) if str(parameter_2).strip() else 0.0
+
+    if mode == "ROTARY":
+        return 360.0
+    if mode == "LEADSCREW":
+        # p1 = paso del husillo [mm/vuelta]
+        return p1
+    if mode == "BELT":
+        # p1 = diámetro primitivo de la polea [mm]
+        return math.pi * p1
+    if mode == "RACK_PINION":
+        # p1 = módulo [mm], p2 = número de dientes
+        if p2 <= 0:
+            raise ValueError("El número de dientes debe ser mayor que cero.")
+        return math.pi * p1 * p2
+    raise ValueError("Kinematics no reconocida: " + mode)
+
+
+def format_decimal(value):
+    text = "{0:.12f}".format(float(value)).rstrip("0").rstrip(".")
+    return text if "." in text else text + ".0"
+
+
+def render_user_menu():
+    menu_label = "👤 " + (st.session_state.get("user_name") or st.session_state.user_email)
+    with st.popover(menu_label, use_container_width=True):
+        st.caption(st.session_state.user_email)
+        st.write("**{0}:** {1}".format(t("role"), st.session_state.user_role))
+        action = st.radio(
+            t("user_options"),
+            [t("change_password"), t("logout")],
+            label_visibility="collapsed",
+            key="user_menu_action"
+        )
+
+        if action == t("change_password"):
+            with st.form("change_password_form", clear_on_submit=True):
+                current_password = st.text_input(t("current_password"), type="password")
+                new_password = st.text_input(t("new_password"), type="password")
+                repeat_password = st.text_input(t("repeat_password"), type="password")
+                submitted = st.form_submit_button(t("save_password"), use_container_width=True)
+
+            if submitted:
+                if new_password != repeat_password:
+                    st.error(t("passwords_do_not_match"))
+                else:
+                    ok, message = change_password(
+                        st.session_state.user_email,
+                        current_password,
+                        new_password
+                    )
+                    if ok:
+                        st.success(message)
+                        st.info(t("password_railway_note"))
+                    else:
+                        st.error(message)
+        else:
+            if st.button(t("logout"), use_container_width=True, type="primary"):
+                logout()
 
 init_auth_state()
 LOGO_PATH = Path(__file__).resolve().parent / "Lenze.png"
@@ -188,8 +258,7 @@ def render_corporate_header():
         )
 
     with logout_col:
-        if st.button("↪ " + t("logout"), use_container_width=True):
-            logout()
+        render_user_menu()
 
 
 
@@ -446,9 +515,38 @@ for i,a in enumerate(st.session_state.axes):
         c1,c2,c3,c4=st.columns(4)
         for col,z in zip((c1,c2,c3,c4),("z1","z2","z3","z4")): a[z]=col.number_input(z.upper(),1,1000000,int(a.get(z,1)),key=f"{z}{i}")
         c1,c2,c3=st.columns(3)
-        a["feed_constant"]=c1.text_input(t("feed_constant"),str(a.get("feed_constant",360.0)),key=f"feed{i}")
-        if a["kinematics"]=="ROTARY": a["cycle_length"]=c2.text_input(t("cycle_length"),str(a.get("cycle_length",360.0)),key=f"cycle{i}")
-        else: a["cycle_length"]=0.0
+        feed_key=f"feed{i}"
+        if feed_key not in st.session_state:
+            st.session_state[feed_key]=str(a.get("feed_constant",360.0))
+        a["feed_constant"]=c1.text_input(t("feed_constant"),key=feed_key)
+
+        with c3.popover("🧮 " + t("feed_calculator"), use_container_width=True):
+            calc_mode=a["kinematics"]
+            if calc_mode=="ROTARY":
+                st.info("360° / revolution")
+                calc_p1=360.0
+                calc_p2=0.0
+            elif calc_mode=="LEADSCREW":
+                calc_p1=st.number_input(t("lead_pitch"),min_value=0.000001,value=10.0,key=f"calc_p1_{i}")
+                calc_p2=0.0
+            elif calc_mode=="BELT":
+                calc_p1=st.number_input(t("pulley_diameter"),min_value=0.000001,value=100.0,key=f"calc_p1_{i}")
+                calc_p2=0.0
+            else:
+                calc_p1=st.number_input(t("rack_module"),min_value=0.000001,value=2.0,key=f"calc_p1_{i}")
+                calc_p2=st.number_input(t("pinion_teeth"),min_value=1,value=20,key=f"calc_p2_{i}")
+
+            if st.button(t("calculate"),key=f"calculate_feed_{i}",use_container_width=True,type="primary"):
+                result=calculate_feed_constant(calc_mode,calc_p1,calc_p2)
+                st.session_state[feed_key]=format_decimal(result)
+                a["feed_constant"]=st.session_state[feed_key]
+                st.success(t("calculated_feed") + ": " + st.session_state[feed_key])
+                st.rerun()
+
+        if a["kinematics"]=="ROTARY":
+            a["cycle_length"]=c2.text_input(t("cycle_length"),str(a.get("cycle_length",360.0)),key=f"cycle{i}")
+        else:
+            a["cycle_length"]=0.0
 
 cfg={"format":"LenzeMachineBuilderWeb","format_version":1,"cpu_model":cpu,"cpu_version":cpu_sel.get("version",""),"cpu_device_id":cpu_sel.get("device_id",cpu_sel.get("type","")),"ethercat_master_label":master_label,"ethercat_master_version":master_sel.get("version",""),"ethercat_master_device_id":master_sel.get("device_id",master_sel.get("type","")),"project_path":project_path,"axes":st.session_state.axes,"robot_groups":[]}
 errors=validate_config(cfg)

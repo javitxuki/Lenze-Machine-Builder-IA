@@ -57,10 +57,11 @@ def authenticate(email, password):
     if not profile:
         return False, using_defaults
 
-    valid = hmac.compare_digest(
-        str(password),
+    expected_password = _RUNTIME_PASSWORDS.get(
+        key,
         str(profile.get("password", ""))
     )
+    valid = hmac.compare_digest(str(password), expected_password)
     if not valid:
         return False, using_defaults
 
@@ -101,3 +102,30 @@ def render_login(t, logo_path=None):
         _, using_defaults = load_users()
         if using_defaults:
             st.warning(t("default_credentials_warning"))
+
+
+# Contraseñas modificadas durante la ejecución actual del servicio.
+# Para persistencia tras reinicios, actualiza MB_USERS_JSON en Railway.
+_RUNTIME_PASSWORDS = {}
+
+
+def verify_current_password(email, password):
+    users, _ = load_users()
+    key = str(email).strip().lower()
+    expected = _RUNTIME_PASSWORDS.get(
+        key,
+        str(users.get(key, {}).get("password", ""))
+    )
+    return bool(expected) and hmac.compare_digest(str(password), expected)
+
+
+def change_password(email, current_password, new_password):
+    key = str(email).strip().lower()
+    if not verify_current_password(key, current_password):
+        return False, "La contraseña actual no es correcta."
+    if len(str(new_password)) < 8:
+        return False, "La nueva contraseña debe tener al menos 8 caracteres."
+    if str(new_password) == str(current_password):
+        return False, "La nueva contraseña debe ser diferente de la actual."
+    _RUNTIME_PASSWORDS[key] = str(new_password)
+    return True, "Contraseña modificada para la sesión actual del servicio."
