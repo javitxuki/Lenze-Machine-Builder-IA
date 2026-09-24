@@ -598,6 +598,13 @@ with st.sidebar:
     if uploaded and st.button(t("apply"), use_container_width=True):
         loaded = json.load(uploaded)
         st.session_state.axes = loaded.get("axes", st.session_state.axes)
+
+        # Recuperar la ruta del proyecto guardada en el JSON.
+        # Este bloque se ejecuta antes de crear el widget project_path,
+        # por lo que Streamlit permite actualizar su estado sin conflictos.
+        if loaded.get("project_path"):
+            st.session_state["project_path"] = str(loaded["project_path"])
+
         # Eliminar estados de widgets por eje para reconstruirlos con los datos cargados.
         for key in list(st.session_state.keys()):
             if key.startswith(("feed", "kp", "cycle", "en", "name", "drv", "safe")):
@@ -625,7 +632,19 @@ master_selected = (
     master_values[master_labels.index(master_label)] if master_values else {}
 )
 
-project_path = st.text_input(t("path"), r"C:\Temp\LenzeMachine_Auto.project")
+# Ruta editable y persistente durante toda la sesión.
+# Debe ser una ruta válida en el PC Windows donde se ejecutará PLC Designer.
+if "project_path" not in st.session_state:
+    st.session_state["project_path"] = r"C:\Temp\LenzeMachine_Auto.project"
+
+project_path = st.text_input(
+    t("path"),
+    key="project_path",
+    help=(
+        "Ruta completa donde PLC Designer guardará el proyecto. "
+        "Ejemplo: D:\\Proyectos\\MiMaquina.project"
+    ),
+)
 axis_count = st.number_input(t("axes_n"), 1, 32, len(st.session_state.axes), 1)
 
 while len(st.session_state.axes) < axis_count:
