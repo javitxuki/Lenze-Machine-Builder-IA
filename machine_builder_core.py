@@ -162,6 +162,62 @@ def main():
     cpu=exact_device("Controller " + CPU_MODEL, CPU_DEVICE_ID)
     project.add(cpu.device_info.default_instance_name,cpu.device_id)
     controller=project.find("Device",True)[0]
+
+    # Crear Application/PLC_PRG/Task Configuration/MainTask antes de insertar
+    # EtherCAT Master. Así el proyecto ya dispone de una tarea cíclica válida
+    # y no es necesario crear una tarea EtherCAT adicional.
+    application=find_one(project,"Application")
+    if application is None:
+        raise Exception("Application no encontrada después de insertar la CPU.")
+
+    plc_prg=find_one(application,"PLC_PRG")
+    if plc_prg is None:
+        try:
+            plc_prg=application.create_pou("PLC_PRG",PouType.Program)
+        except:
+            plc_prg=application.create_pou("PLC_PRG")
+
+    task_cfg=find_one(application,"Task Configuration")
+    if task_cfg is None:
+        task_cfg=application.create_task_configuration()
+
+    main_task=find_one(task_cfg,"MainTask")
+    if main_task is None:
+        main_task=task_cfg.create_task("MainTask")
+
+    interval_written=False
+    for interval_value in ["T#10ms","t#10ms","10ms","10000"]:
+        try:
+            main_task.interval=interval_value
+            interval_written=True
+            break
+        except:
+            pass
+
+    if not interval_written:
+        raise Exception("No se pudo configurar MainTask a 10 ms.")
+
+    try:
+        main_task.priority=1
+    except:
+        try:
+            main_task.priority="1"
+        except:
+            pass
+
+    try:
+        main_task.task_type="Cyclic"
+    except:
+        try:
+            main_task.type="Cyclic"
+        except:
+            pass
+
+    try:
+        main_task.pous.add("PLC_PRG")
+    except Exception as error:
+        log("Aviso asociando PLC_PRG a MainTask: " + str(error))
+
     master_desc=exact_device("EtherCAT Master",ETHERCAT_MASTER_DEVICE_ID)
     controller.add("EtherCAT_Master",master_desc.device_id)
     master=project.find("EtherCAT_Master",True)[0]
@@ -184,26 +240,6 @@ def main():
             plc_prg=application.create_pou("PLC_PRG")
     plc_prg.textual_declaration.replace({declaration!r})
     plc_prg.textual_implementation.replace({implementation!r})
-    # La descripción Lenze crea automáticamente EtherCAT_Task.
-    # No crear Task Configuration, MainTask ni ninguna tarea adicional.
-    task_cfg=find_one(application,"Task Configuration")
-    if task_cfg is None:
-        raise Exception("Task Configuration no encontrada después de insertar EtherCAT Master.")
-
-    task=find_one(task_cfg,"EtherCAT_Task")
-    if task is None:
-        # Compatibilidad con proyectos/plantillas que ya tengan MainTask.
-        task=find_one(task_cfg,"MainTask")
-
-    if task is None:
-        raise Exception("No se encontró una tarea existente EtherCAT_Task o MainTask.")
-
-    try:
-        task.pous.add("PLC_PRG")
-        log("PLC_PRG asociado a la tarea existente: " + str(task.get_name()))
-    except Exception as error:
-        # Si PLC_PRG ya estaba asociado, ScriptEngine puede lanzar excepción.
-        log("Aviso asociando PLC_PRG a la tarea existente: " + str(error))
     project.save()
     log("Proyecto generado: " + PROJECT_PATH)
 
