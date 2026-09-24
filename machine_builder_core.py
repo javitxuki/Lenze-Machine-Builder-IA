@@ -177,7 +177,11 @@ def main():
             if not project.find(slave["name"],True): raise error
     application=find_one(project,"Application")
     plc_prg=find_one(application,"PLC_PRG")
-    if plc_prg is None: plc_prg=application.create_pou("PLC_PRG",PouType.Program,ImplementationLanguage.ST)
+    if plc_prg is None:
+        try:
+            plc_prg=application.create_pou("PLC_PRG",PouType.Program)
+        except:
+            plc_prg=application.create_pou("PLC_PRG")
     plc_prg.textual_declaration.replace({declaration!r})
     plc_prg.textual_implementation.replace({implementation!r})
     task_cfg=find_one(application,"Task Configuration") or application.create_task_configuration()
