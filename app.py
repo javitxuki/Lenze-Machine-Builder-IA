@@ -438,7 +438,6 @@ def render_machine_assistant():
         if prompt:
             st.session_state.assistant_messages.append({"role": "user", "content": prompt})
             proposal = ai_interpret(prompt, st.session_state.axes)
-            st.write(proposal)
             st.session_state.assistant_proposal = proposal
             response = "**Propuesta preparada**\n\n" + proposal.get("summary", "")
             st.session_state.assistant_messages.append({"role": "assistant", "content": response})
@@ -463,61 +462,75 @@ def render_machine_assistant():
             if apply_col.button(
                 "✅ Aplicar propuesta",
                 use_container_width=True,
-                type="primary"
+                type="primary",
             ):
-
-                # Primero limpiar widgets antiguos
+                # Limpiar primero los estados antiguos de los widgets.
                 clear_axis_widget_state()
 
-                # Después aplicar propuesta
+                # Aplicar el modelo completo recibido del asistente.
                 st.session_state.axes = proposal["axes"]
 
+                # Aplicar también la CPU global propuesta.
                 if proposal.get("cpu_model"):
-                st.session_state["cpu_model"] = proposal["cpu_model"]
+                    st.session_state["cpu_model"] = proposal["cpu_model"]
 
-                # Ahora reconstruir los widgets con los nuevos valores
+                # Precargar las claves exactas de los widgets con los valores
+                # nuevos. Estos widgets todavía no se han creado en este rerun,
+                # porque el asistente aparece antes del formulario de ejes.
                 for index, axis in enumerate(proposal["axes"]):
-
-                    st.session_state[f"drv{index}"] = axis["drive_type"]
-
-                    st.session_state[f"safe{index}"] = axis["safety_variant"]
-
-                    st.session_state[f"kin{index}"] = axis["kinematics"]
-
+                    st.session_state[f"en{index}"] = bool(axis.get("enabled", True))
+                    st.session_state[f"name{index}"] = axis.get(
+                        "name", f"Axis_{index + 1:02d}"
+                    )
+                    st.session_state[f"drv{index}"] = axis.get(
+                        "drive_type", "i950"
+                    )
+                    st.session_state[f"safe{index}"] = axis.get(
+                        "safety_variant", "Basic Safety"
+                    )
+                    st.session_state[f"i950{index}"] = axis.get(
+                        "i950_variant", "Normal"
+                    )
+                    st.session_state[f"alias{index}"] = int(
+                        axis.get("station_alias", 1001 + index)
+                    )
+                    st.session_state[f"alias2_{index}"] = int(
+                        axis.get("second_station_alias", 2001 + index)
+                    )
+                    st.session_state[f"c86{index}"] = axis.get(
+                        "motor_code_c86", ""
+                    )
+                    st.session_state[f"kin{index}"] = axis.get(
+                        "kinematics", "ROTARY"
+                    )
                     st.session_state[f"kp{index}"] = str(
-                        axis["kinematic_parameter"]
+                        axis.get("kinematic_parameter", 360.0)
                     )
-
-                    st.session_state[f"z1_{index}"] = axis["z1"]
-                    st.session_state[f"z2_{index}"] = axis["z2"]
-                    st.session_state[f"z3_{index}"] = axis["z3"]
-                    st.session_state[f"z4_{index}"] = axis["z4"]
-
+                    st.session_state[f"traversing{index}"] = axis.get(
+                        "traversing_range", "MODULO"
+                    )
+                    st.session_state[f"z1_{index}"] = int(axis.get("z1", 1))
+                    st.session_state[f"z2_{index}"] = int(axis.get("z2", 1))
+                    st.session_state[f"z3_{index}"] = int(axis.get("z3", 1))
+                    st.session_state[f"z4_{index}"] = int(axis.get("z4", 1))
                     st.session_state[f"feed_widget_{index}"] = str(
-                        axis["feed_constant"]
+                        axis.get("feed_constant", 360.0)
                     )
 
-                    st.session_state[f"traversing{index}"] = (
-                        axis["traversing_range"]
-                    )
+                    if axis.get("kinematics", "ROTARY") == "ROTARY":
+                        st.session_state[f"cycle{index}"] = str(
+                            axis.get("cycle_length", 360.0)
+                        )
 
                 st.session_state.assistant_proposal = None
-
-                st.session_state.assistant_messages.append({
-                    "role": "assistant",
-                    "content": "Configuración aplicada."
-                })
-
+                st.session_state.assistant_messages.append(
+                    {
+                        "role": "assistant",
+                        "content": "Configuración aplicada.",
+                    }
+                )
                 st.rerun()
 
-                st.session_state.assistant_proposal = None
-
-                st.session_state.assistant_messages.append({
-                    "role": "assistant",
-                    "content": "Configuración aplicada."
-                 })
-
-                st.rerun()
             if discard_col.button("❌ Descartar", use_container_width=True):
                 st.session_state.assistant_proposal = None
                 st.rerun()
