@@ -259,6 +259,10 @@ def request_feed_update(axis_index, result):
         axis_index
     ]["feed_constant"] = formatted
 
+    st.session_state[
+        f"feed_widget_{axis_index}"
+    ] = formatted
+
 
 init_auth_state()
 if not st.session_state.authenticated:
@@ -429,19 +433,22 @@ for i, axis in enumerate(st.session_state.axes):
             )
 
         col1, col2, col3 = st.columns(3)
-        feed_key = f"feed{i}"
+        feed_widget_key = f"feed_widget_{i}"
 
-        current_feed = str(
-            axis.get(
-            "feed_constant",
-            360.0
+        if feed_widget_key not in st.session_state:
+
+            st.session_state[
+                feed_widget_key
+            ] = str(
+                axis.get(
+                    "feed_constant",
+                    360.0
+                )
             )
-        )
 
         axis["feed_constant"] = col1.text_input(
             t("feed"),
-            value=current_feed,
-            key=f"feed_widget_{i}"
+            key=feed_widget_key
         )
 
 
