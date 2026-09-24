@@ -466,13 +466,49 @@ def render_machine_assistant():
                 type="primary"
             ):
 
+                # Primero limpiar widgets antiguos
+                clear_axis_widget_state()
+
+                # Después aplicar propuesta
                 st.session_state.axes = proposal["axes"]
 
-                # Aplicar CPU propuesta por el asistente
                 if proposal.get("cpu_model"):
-                    st.session_state["cpu_model"] = proposal["cpu_model"]
+                st.session_state["cpu_model"] = proposal["cpu_model"]
 
-                clear_axis_widget_state()
+                # Ahora reconstruir los widgets con los nuevos valores
+                for index, axis in enumerate(proposal["axes"]):
+
+                    st.session_state[f"drv{index}"] = axis["drive_type"]
+
+                    st.session_state[f"safe{index}"] = axis["safety_variant"]
+
+                    st.session_state[f"kin{index}"] = axis["kinematics"]
+
+                    st.session_state[f"kp{index}"] = str(
+                        axis["kinematic_parameter"]
+                    )
+
+                    st.session_state[f"z1_{index}"] = axis["z1"]
+                    st.session_state[f"z2_{index}"] = axis["z2"]
+                    st.session_state[f"z3_{index}"] = axis["z3"]
+                    st.session_state[f"z4_{index}"] = axis["z4"]
+
+                    st.session_state[f"feed_widget_{index}"] = str(
+                        axis["feed_constant"]
+                    )
+
+                    st.session_state[f"traversing{index}"] = (
+                        axis["traversing_range"]
+                    )
+
+                st.session_state.assistant_proposal = None
+
+                st.session_state.assistant_messages.append({
+                    "role": "assistant",
+                    "content": "Configuración aplicada."
+                })
+
+                st.rerun()
 
                 st.session_state.assistant_proposal = None
 
