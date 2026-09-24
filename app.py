@@ -140,10 +140,10 @@ for i,a in enumerate(st.session_state.axes):
     ):
         st.session_state[fkey] = current_feed
 
-    a["feed_constant"] = c1.text_input(
-        t("feed"),
-        key=fkey
-    )
+        a["feed_constant"] = c1.text_input(
+            t("feed"),
+            key=fkey
+        )
         if a["kinematics"]=="ROTARY":
             a["cycle_length"]=c2.text_input(t("cycle"),str(a.get("cycle_length",360)),key=f"cycle{i}")
         else:
