@@ -125,18 +125,25 @@ for i,a in enumerate(st.session_state.axes):
         c1,c2,c3=st.columns(3)
         fkey = f"feed{i}"
 
-        feed_value = str(
+        # Mantener sincronizado el widget con el modelo
+        current_feed = str(
             st.session_state.axes[i].get(
-                "feed_constant",
-                360.0
-            )
+            "feed_constant",
+            360.0
         )
+    )
 
-        a["feed_constant"] = c1.text_input(
-            t("feed"),
-            value=feed_value,
-            key=fkey
-        )
+    if (
+        fkey not in st.session_state
+        or
+        st.session_state[fkey] != current_feed
+    ):
+        st.session_state[fkey] = current_feed
+
+    a["feed_constant"] = c1.text_input(
+        t("feed"),
+        key=fkey
+    )
         if a["kinematics"]=="ROTARY":
             a["cycle_length"]=c2.text_input(t("cycle"),str(a.get("cycle_length",360)),key=f"cycle{i}")
         else:
@@ -151,7 +158,7 @@ for i,a in enumerate(st.session_state.axes):
 
                 result = feed_calc(
                     a["kinematics"],
-                a["kinematic_parameter"]
+                    a["kinematic_parameter"]
                 )
 
                 # Guardar en el modelo de datos,
