@@ -491,6 +491,33 @@ def render_machine_assistant():
                     st.session_state[f"i950{index}"] = axis.get(
                         "i950_variant", "Normal"
                     )
+
+                    # Recalcular el descriptor después de cambiar Drive, Safety
+                    # o tipo i950. Nunca reutilizar un descriptor del drive anterior.
+                    descriptor_options = drive_options(
+                        repo,
+                        axis.get("drive_type", "i950"),
+                        axis.get("safety_variant", "Basic Safety"),
+                        axis.get("i950_variant", "Normal"),
+                    )
+
+                    if descriptor_options:
+                        selected_descriptor = descriptor_options[0]
+                        descriptor_label = (
+                            f"{selected_descriptor['name']} "
+                            f"[{selected_descriptor.get('version', '')}]"
+                        )
+                        axis["descriptor_label"] = descriptor_label
+                        axis["device_id"] = selected_descriptor.get(
+                            "device_id",
+                            selected_descriptor.get("type", ""),
+                        )
+                        st.session_state[f"desc{index}"] = descriptor_label
+                    else:
+                        axis["descriptor_label"] = "Sin descriptor"
+                        axis["device_id"] = ""
+                        st.session_state[f"desc{index}"] = "Sin descriptor"
+
                     st.session_state[f"alias{index}"] = int(
                         axis.get("station_alias", 1001 + index)
                     )
@@ -655,7 +682,17 @@ for i, axis in enumerate(st.session_state.axes):
         descriptor_labels = [
             f"{item['name']} [{item.get('version', '')}]" for item in descriptors
         ] or ["Sin descriptor"]
-        descriptor_label = col2.selectbox(t("desc"), descriptor_labels, key=f"desc{i}")
+        descriptor_key = f"desc{i}"
+        current_descriptor = st.session_state.get(descriptor_key)
+        if current_descriptor not in descriptor_labels:
+            # Drive/Safety cambió: seleccionar el primer descriptor compatible.
+            st.session_state[descriptor_key] = descriptor_labels[0]
+
+        descriptor_label = col2.selectbox(
+            t("desc"),
+            descriptor_labels,
+            key=descriptor_key,
+        )
         descriptor_selected = (
             descriptors[descriptor_labels.index(descriptor_label)] if descriptors else {}
         )
