@@ -366,12 +366,41 @@ from ai_assistant import interpret as ai_interpret, transcribe_audio as ai_trans
 
 
 def clear_axis_widget_state():
+
     prefixes = (
-        "feed_widget_", "kp", "cycle", "en", "name", "drv", "safe",
-        "i950", "desc", "alias", "c86", "kin", "traversing", "z1_", "z2_", "z3_", "z4_"
+        "feed",
+        "feed_widget_",
+
+        "kp",
+        "cycle",
+
+        "en",
+        "name",
+
+        "drv",
+        "safe",
+
+        "i950",
+        "desc",
+
+        "alias",
+        "alias2",
+
+        "c86",
+        "kin",
+
+        "traversing",
+
+        "z1",
+        "z2",
+        "z3",
+        "z4",
     )
+
     for key in list(st.session_state.keys()):
+
         if str(key).startswith(prefixes):
+
             del st.session_state[key]
 
 
@@ -431,11 +460,27 @@ def render_machine_assistant():
                 })
             st.dataframe(preview, use_container_width=True, hide_index=True)
             apply_col, discard_col = st.columns(2)
-            if apply_col.button("✅ Aplicar propuesta", use_container_width=True, type="primary"):
+            if apply_col.button(
+                "✅ Aplicar propuesta",
+                use_container_width=True,
+                type="primary"
+            ):
+
                 st.session_state.axes = proposal["axes"]
+
+                # Aplicar CPU propuesta por el asistente
+                if proposal.get("cpu_model"):
+                    st.session_state["cpu_model"] = proposal["cpu_model"]
+
                 clear_axis_widget_state()
+
                 st.session_state.assistant_proposal = None
-                st.session_state.assistant_messages.append({"role": "assistant", "content": "Configuración aplicada."})
+
+                st.session_state.assistant_messages.append({
+                    "role": "assistant",
+                    "content": "Configuración aplicada."
+                 })
+
                 st.rerun()
             if discard_col.button("❌ Descartar", use_container_width=True):
                 st.session_state.assistant_proposal = None
