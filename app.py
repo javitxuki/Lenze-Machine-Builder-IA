@@ -333,7 +333,6 @@ def user_menu():
 
 
 def header():
-
     st.markdown(
         f'<div class="lenze-head">{logo_html()}'
         f'<div class="lenze-title"><b>{t("title")}</b>'
@@ -341,30 +340,12 @@ def header():
         unsafe_allow_html=True,
     )
 
-    menu_col, language_col, _, user_col = st.columns(
-        [0.9, 0.7, 4.0, 2.5]
-    )
-
-    with menu_col:
-
-        if st.button(
-            "☰ Menú",
-            use_container_width=True,
-            key="show_sidebar_button"
-        ):
-
-            st.info(
-                "Para mostrar el panel lateral pulsa la flecha ▶ situada en el borde izquierdo del navegador."
-            )
+    language_col, _, user_col = st.columns([0.7, 5.5, 2.5])
 
     with language_col:
-
-        language_selector(
-            "header_language"
-        )
+        language_selector("header_language")
 
     with user_col:
-
         user_menu()
 
 
@@ -596,24 +577,36 @@ if "axes" not in st.session_state:
         for index in range(1, 3)
     ]
 
+# Aplicar una configuración cargada desde la zona inferior.
+# Se procesa al inicio del nuevo rerun, antes de crear los widgets.
+if st.session_state.get("pending_loaded_configuration") is not None:
+    loaded = st.session_state.pop("pending_loaded_configuration")
+
+    clear_axis_widget_state()
+    st.session_state.axes = loaded.get("axes", st.session_state.axes)
+
+    if loaded.get("cpu_model") in CPU_MODELS:
+        st.session_state["cpu_model"] = loaded["cpu_model"]
+
+    if loaded.get("project_path"):
+        st.session_state["project_path"] = str(loaded["project_path"])
+
+    st.session_state["configuration_load_message"] = (
+        "Configuración cargada correctamente."
+    )
+
 render_machine_assistant()
 
-with st.sidebar:
-    st.header(t("config"))
-    uploaded = st.file_uploader(t("load"), type=["json"])
-    if uploaded and st.button(t("apply"), use_container_width=True):
-        loaded = json.load(uploaded)
-        st.session_state.axes = loaded.get("axes", st.session_state.axes)
-        # Eliminar estados de widgets por eje para reconstruirlos con los datos cargados.
-        for key in list(st.session_state.keys()):
-            if key.startswith(("feed", "kp", "cycle", "en", "name", "drv", "safe")):
-                del st.session_state[key]
-        st.rerun()
+if st.session_state.pop("configuration_load_message", None):
+    st.success("Configuración cargada correctamente.")
+
+if "cpu_model" not in st.session_state:
+    st.session_state["cpu_model"] = "c550"
 
 cpu = st.selectbox(
     t("cpu"),
     CPU_MODELS,
-    index=CPU_MODELS.index(st.session_state.get("cpu_model", "c550")),
+    key="cpu_model",
 )
 cpu_values = cpu_options(repo, cpu)
 cpu_labels = [f"{item['name']} [{item.get('version', '')}]" for item in cpu_values] or [
@@ -816,23 +809,69 @@ configuration = {
 }
 
 validation_errors = validate_config(configuration)
+generated_script = None
+
 if validation_errors:
     for validation_error in validation_errors:
         st.error(validation_error)
 else:
     generated_script = generate_plc_script(configuration)
-    left, right = st.columns(2)
-    left.download_button(
-        t("download"),
-        generated_script,
-        "Create_PLCDesigner_Project_Generated.py",
-        "text/x-python",
-        use_container_width=True,
+
+st.markdown("---")
+st.subheader("💾 Configuración y generación")
+
+load_col, save_col, script_col = st.columns(3)
+
+with load_col:
+    uploaded_configuration = st.file_uploader(
+        t("load"),
+        type=["json"],
+        key="bottom_configuration_uploader",
     )
-    right.download_button(
+
+    if st.button(
+        t("apply"),
+        key="bottom_apply_configuration",
+        use_container_width=True,
+        disabled=uploaded_configuration is None,
+    ):
+        try:
+            loaded_configuration = json.load(uploaded_configuration)
+            if not isinstance(loaded_configuration, dict):
+                raise ValueError("El JSON no contiene una configuración válida.")
+
+            st.session_state["pending_loaded_configuration"] = loaded_configuration
+            st.rerun()
+        except Exception as error:
+            st.error("No se pudo cargar la configuración: " + str(error))
+
+with save_col:
+    st.write("")
+    st.write("")
+    st.download_button(
         t("save_json"),
         config_json(configuration),
         "machine_configuration.json",
         "application/json",
         use_container_width=True,
     )
+
+with script_col:
+    st.write("")
+    st.write("")
+    if generated_script is not None:
+        st.download_button(
+            t("download"),
+            generated_script,
+            "Create_PLCDesigner_Project_Generated.py",
+            "text/x-python",
+            use_container_width=True,
+        )
+    else:
+        st.button(
+            t("download"),
+            use_container_width=True,
+            disabled=True,
+            help="Corrige los errores de validación antes de generar el script.",
+        )
+
