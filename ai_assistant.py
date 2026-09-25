@@ -15,7 +15,9 @@ import unicodedata
 from copy import deepcopy
 
 
-SUPPORTED_CPUS = ("c430", "c520", "c550") SUPPORTED_DRIVES = ("i550", "i750", "i950") SUPPORTED_KINEMATICS = ("ROTARY", "LEADSCREW", "BELT", "RACK_PINION")
+SUPPORTED_CPUS = ("c430", "c520", "c550") 
+SUPPORTED_DRIVES = ("i550", "i750", "i950") 
+SUPPORTED_KINEMATICS = ("ROTARY", "LEADSCREW", "BELT", "RACK_PINION")
 
 
 # ============================================================
