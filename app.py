@@ -333,16 +333,38 @@ def user_menu():
 
 
 def header():
+
     st.markdown(
         f'<div class="lenze-head">{logo_html()}'
         f'<div class="lenze-title"><b>{t("title")}</b>'
         f'<span>{t("subtitle")}</span></div></div>',
         unsafe_allow_html=True,
     )
-    language_col, _, user_col = st.columns([0.7, 4.8, 2.5])
+
+    menu_col, language_col, _, user_col = st.columns(
+        [0.9, 0.7, 4.0, 2.5]
+    )
+
+    with menu_col:
+
+        if st.button(
+            "☰ Menú",
+            use_container_width=True,
+            key="show_sidebar_button"
+        ):
+
+            st.info(
+                "Para mostrar el panel lateral pulsa la flecha ▶ situada en el borde izquierdo del navegador."
+            )
+
     with language_col:
-        language_selector("header_language")
+
+        language_selector(
+            "header_language"
+        )
+
     with user_col:
+
         user_menu()
 
 
@@ -438,6 +460,7 @@ def render_machine_assistant():
         if prompt:
             st.session_state.assistant_messages.append({"role": "user", "content": prompt})
             proposal = ai_interpret(prompt, st.session_state.axes)
+            st.write(proposal)
             st.session_state.assistant_proposal = proposal
             response = "**Propuesta preparada**\n\n" + proposal.get("summary", "")
             st.session_state.assistant_messages.append({"role": "assistant", "content": response})
@@ -462,102 +485,85 @@ def render_machine_assistant():
             if apply_col.button(
                 "✅ Aplicar propuesta",
                 use_container_width=True,
-                type="primary",
+                type="primary"
             ):
-                # Limpiar primero los estados antiguos de los widgets.
+
+                # Primero limpiar widgets antiguos
                 clear_axis_widget_state()
 
-                # Aplicar el modelo completo recibido del asistente.
+                # Después aplicar propuesta
                 st.session_state.axes = proposal["axes"]
 
-                # Aplicar también la CPU global propuesta.
                 if proposal.get("cpu_model"):
                     st.session_state["cpu_model"] = proposal["cpu_model"]
+               
+                # Ahora reconstruir los widgets con los nuevos valores
+                    for index, axis in enumerate(proposal["axes"]):
 
-                # Precargar las claves exactas de los widgets con los valores
-                # nuevos. Estos widgets todavía no se han creado en este rerun,
-                # porque el asistente aparece antes del formulario de ejes.
-                for index, axis in enumerate(proposal["axes"]):
-                    st.session_state[f"en{index}"] = bool(axis.get("enabled", True))
-                    st.session_state[f"name{index}"] = axis.get(
-                        "name", f"Axis_{index + 1:02d}"
-                    )
-                    st.session_state[f"drv{index}"] = axis.get(
-                        "drive_type", "i950"
-                    )
-                    st.session_state[f"safe{index}"] = axis.get(
-                        "safety_variant", "Basic Safety"
-                    )
-                    st.session_state[f"i950{index}"] = axis.get(
-                        "i950_variant", "Normal"
-                    )
+                        st.session_state[f"drv{index}"] = axis["drive_type"]
 
-                    # Recalcular el descriptor después de cambiar Drive, Safety
-                    # o tipo i950. Nunca reutilizar un descriptor del drive anterior.
-                    descriptor_options = drive_options(
+                        st.session_state[f"safe{index}"] = axis["safety_variant"]
+                        descriptors = drive_options(
                         repo,
-                        axis.get("drive_type", "i950"),
-                        axis.get("safety_variant", "Basic Safety"),
-                        axis.get("i950_variant", "Normal"),
-                    )
-
-                    if descriptor_options:
-                        selected_descriptor = descriptor_options[0]
-                        descriptor_label = (
-                            f"{selected_descriptor['name']} "
-                            f"[{selected_descriptor.get('version', '')}]"
+                        axis["drive_type"],
+                        axis["safety_variant"],
+                        axis.get("i950_variant", "Normal")
                         )
-                        axis["descriptor_label"] = descriptor_label
-                        axis["device_id"] = selected_descriptor.get(
+
+                    if descriptors:
+
+                        first_descriptor = descriptors[0]
+
+                        axis["descriptor_label"] = (
+                            f"{first_descriptor['name']} "
+                            f"[{first_descriptor.get('version','')}]"
+                        )
+
+                        axis["device_id"] = first_descriptor.get(
                             "device_id",
-                            selected_descriptor.get("type", ""),
+                            ""
                         )
-                        st.session_state[f"desc{index}"] = descriptor_label
-                    else:
-                        axis["descriptor_label"] = "Sin descriptor"
-                        axis["device_id"] = ""
-                        st.session_state[f"desc{index}"] = "Sin descriptor"
 
-                    st.session_state[f"alias{index}"] = int(
-                        axis.get("station_alias", 1001 + index)
-                    )
-                    st.session_state[f"alias2_{index}"] = int(
-                        axis.get("second_station_alias", 2001 + index)
-                    )
-                    st.session_state[f"c86{index}"] = axis.get(
-                        "motor_code_c86", ""
-                    )
-                    st.session_state[f"kin{index}"] = axis.get(
-                        "kinematics", "ROTARY"
-                    )
+                        st.session_state[f"desc{index}"] = (
+                            axis["descriptor_label"]
+                        )
+
+                    st.session_state[f"kin{index}"] = axis["kinematics"]
+
                     st.session_state[f"kp{index}"] = str(
-                        axis.get("kinematic_parameter", 360.0)
-                    )
-                    st.session_state[f"traversing{index}"] = axis.get(
-                        "traversing_range", "MODULO"
-                    )
-                    st.session_state[f"z1_{index}"] = int(axis.get("z1", 1))
-                    st.session_state[f"z2_{index}"] = int(axis.get("z2", 1))
-                    st.session_state[f"z3_{index}"] = int(axis.get("z3", 1))
-                    st.session_state[f"z4_{index}"] = int(axis.get("z4", 1))
-                    st.session_state[f"feed_widget_{index}"] = str(
-                        axis.get("feed_constant", 360.0)
+                        axis["kinematic_parameter"]
                     )
 
-                    if axis.get("kinematics", "ROTARY") == "ROTARY":
-                        st.session_state[f"cycle{index}"] = str(
-                            axis.get("cycle_length", 360.0)
-                        )
+                    st.session_state[f"z1_{index}"] = axis["z1"]
+                    st.session_state[f"z2_{index}"] = axis["z2"]
+                    st.session_state[f"z3_{index}"] = axis["z3"]
+                    st.session_state[f"z4_{index}"] = axis["z4"]
+
+                    st.session_state[f"feed_widget_{index}"] = str(
+                        axis["feed_constant"]
+                    )
+
+                    st.session_state[f"traversing{index}"] = (
+                        axis["traversing_range"]
+                    )
 
                 st.session_state.assistant_proposal = None
-                st.session_state.assistant_messages.append(
-                    {
-                        "role": "assistant",
-                        "content": "Configuración aplicada.",
-                    }
-                )
+
+                st.session_state.assistant_messages.append({
+                    "role": "assistant",
+                    "content": "Configuración aplicada."
+                })
+
                 st.rerun()
 
+                st.session_state.assistant_proposal = None
+
+                st.session_state.assistant_messages.append({
+                    "role": "assistant",
+                    "content": "Configuración aplicada."
+                 })
+
+                st.rerun()
             if discard_col.button("❌ Descartar", use_container_width=True):
                 st.session_state.assistant_proposal = None
                 st.rerun()
@@ -598,13 +604,6 @@ with st.sidebar:
     if uploaded and st.button(t("apply"), use_container_width=True):
         loaded = json.load(uploaded)
         st.session_state.axes = loaded.get("axes", st.session_state.axes)
-
-        # Recuperar la ruta del proyecto guardada en el JSON.
-        # Este bloque se ejecuta antes de crear el widget project_path,
-        # por lo que Streamlit permite actualizar su estado sin conflictos.
-        if loaded.get("project_path"):
-            st.session_state["project_path"] = str(loaded["project_path"])
-
         # Eliminar estados de widgets por eje para reconstruirlos con los datos cargados.
         for key in list(st.session_state.keys()):
             if key.startswith(("feed", "kp", "cycle", "en", "name", "drv", "safe")):
@@ -632,18 +631,15 @@ master_selected = (
     master_values[master_labels.index(master_label)] if master_values else {}
 )
 
-# Ruta editable y persistente durante toda la sesión.
-# Debe ser una ruta válida en el PC Windows donde se ejecutará PLC Designer.
 if "project_path" not in st.session_state:
-    st.session_state["project_path"] = r"C:\Temp\LenzeMachine_Auto.project"
+
+    st.session_state["project_path"] = (
+        r"C:\Temp\LenzeMachine_Auto.project"
+    )
 
 project_path = st.text_input(
     t("path"),
-    key="project_path",
-    help=(
-        "Ruta completa donde PLC Designer guardará el proyecto. "
-        "Ejemplo: D:\\Proyectos\\MiMaquina.project"
-    ),
+    key="project_path"
 )
 axis_count = st.number_input(t("axes_n"), 1, 32, len(st.session_state.axes), 1)
 
@@ -701,17 +697,7 @@ for i, axis in enumerate(st.session_state.axes):
         descriptor_labels = [
             f"{item['name']} [{item.get('version', '')}]" for item in descriptors
         ] or ["Sin descriptor"]
-        descriptor_key = f"desc{i}"
-        current_descriptor = st.session_state.get(descriptor_key)
-        if current_descriptor not in descriptor_labels:
-            # Drive/Safety cambió: seleccionar el primer descriptor compatible.
-            st.session_state[descriptor_key] = descriptor_labels[0]
-
-        descriptor_label = col2.selectbox(
-            t("desc"),
-            descriptor_labels,
-            key=descriptor_key,
-        )
+        descriptor_label = col2.selectbox(t("desc"), descriptor_labels, key=f"desc{i}")
         descriptor_selected = (
             descriptors[descriptor_labels.index(descriptor_label)] if descriptors else {}
         )
