@@ -6,60 +6,89 @@ Asistente híbrido:
 3. La configuración nunca se aplica automáticamente.
    app.py muestra la propuesta y el usuario decide si aplicarla.
 """
-from __future__ import annotations
+
 import io
-import json
 import math
 import os
 import re
 import unicodedata
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Tuple
-SUPPORTED_CPUS = ("c430", "c520", "c550")
-SUPPORTED_DRIVES = ("i550", "i750", "i950")
-SUPPORTED_KINEMATICS = (
-    "ROTARY",
-    "LEADSCREW",
-    "BELT",
-    "RACK_PINION",
-)
+
+
+SUPPORTED_CPUS = ("c430", "c520", "c550") SUPPORTED_DRIVES = ("i550", "i750", "i950") SUPPORTED_KINEMATICS = ("ROTARY", "LEADSCREW", "BELT", "RACK_PINION")
+
+
 # ============================================================
 # UTILIDADES
 # ============================================================
-def _normalize(text: Any) -> str:
-    value = str(text or "").strip().lower()
-    value = unicodedata.normalize("NFKD", value)
-    value = "".join(
-        ch for ch in value
-        if not unicodedata.combining(ch)
-    )
-    value = value.replace("−", "-").replace("–", "-")
-    value = re.sub(r"\s+", " ", value)
-    return value
-def _number(value: Any) -> float:
-    raw = str(value).strip().replace(" ", "").replace(",", ".")
-    return float(raw)
-def _formatted_number(value: float) -> float:
-    text = "{0:.12f}".format(float(value))
-    text = text.rstrip("0").rstrip(".")
-    return float(text)
-def _feed(mode: str, parameter: Any) -> float:
-    mode = str(mode).upper()
-    value = _number(parameter)
-    if mode == "ROTARY":
-        return 360.0
-    if mode == "LEADSCREW":
-        return _formatted_number(value)
-    if mode in ("BELT", "RACK_PINION"):
-        return _formatted_number(math.pi * value)
-    raise ValueError("Kinematics no reconocida: " + mode)
-# ============================================================
-# CONFIGURACIÓN DE EJES
-# ============================================================
-def _new_axis(index: int) -> Dict[str, Any]:
+
+def _normalize(value):
+    text = str(value or "").strip().lower()
+    text = unicodedata.normalize("NFD", text)
+    text = "".join(c for c in text if unicodedata.category(c) != "Mn")
+    return text
+
+
+def _number(value, default=None):
+    try:
+        return float(str(value).replace(",", "."))
+    except Exception:
+        return default
+
+
+def _formatted_number(value):
+    if value is None:
+        return ""
+    try:
+        number = float(value)
+        if number.is_integer():
+            return str(int(number))
+        return f"{number:.4f}".rstrip("0").rstrip(".")
+    except Exception:
+        return str(value)
+
+
+def _feed(kinematics, parameter, z1=1, z2=1, z3=1, z4=1):
+    """
+    Calcula el feed constant de forma coherente con la lógica
+    del Machine Builder.
+    """
+
+    kinematics = str(kinematics or "ROTARY").upper()
+
+    parameter = _number(parameter, 360.0)
+    z1 = _number(z1, 1)
+    z2 = _number(z2, 1)
+    z3 = _number(z3, 1)
+    z4 = _number(z4, 1)
+
+    if parameter is None:
+        parameter = 360.0
+
+    if z1 == 0:
+        z1 = 1
+    if z2 == 0:
+        z2 = 1
+    if z3 == 0:
+        z3 = 1
+    if z4 == 0:
+        z4 = 1
+
+    ratio = (z1 / z2) * (z3 / z4)
+
+    if kinematics == "ROTARY":
+        return parameter * ratio
+
+    if kinematics in ("LEADSCREW", "BELT", "RACK_PINION"):
+        return parameter * ratio
+
+    return parameter * ratio
+
+
+def _new_axis(index):
     return {
         "enabled": True,
-        "name": "Axis_{0:02d}".format(index),
+        "name": f"Axis_{index:02d}",
         "drive_type": "i950",
         "safety_variant": "Basic Safety",
         "i950_variant": "Normal",
@@ -78,601 +107,736 @@ def _new_axis(index: int) -> Dict[str, Any]:
         "feed_constant": 360.0,
         "cycle_length": 360.0,
     }
-def _ensure_axes(
-    axes: List[Dict[str, Any]],
-    count: int
-) -> List[Dict[str, Any]]:
-    count = max(1, min(32, int(count)))
-    while len(axes) < count:
-        axes.append(_new_axis(len(axes) + 1))
-    return axes[:count]
-def _sanitize_axis(axis: Dict[str, Any], index: int) -> Dict[str, Any]:
-    """Completa un eje devuelto por OpenAI con valores seguros."""
+
+
+def _ensure_axes(current_axes):
+    axes = deepcopy(current_axes or [])
+
+    if not axes:
+        axes = [_new_axis(1)]
+
+    return axes
+
+
+# ============================================================
+# PARSER LOCAL
+# ============================================================
+
+def _detect_cpu(prompt):
+    text = _normalize(prompt)
+
+    for cpu in SUPPORTED_CPUS:
+        if re.search(rf"\b{re.escape(cpu)}\b", text):
+            return cpu
+
+    return None
+
+
+def _detect_axis_count(prompt):
+    text = _normalize(prompt)
+
+    patterns = [
+        r"\b(\d+)\s+ejes?\b",
+        r"\b(\d+)\s+axes?\b",
+        r"\bcon\s+(\d+)\s+ejes?\b",
+        r"\bcon\s+(\d+)\s+axes?\b",
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            try:
+                return max(1, int(match.group(1)))
+            except Exception:
+                pass
+
+    return None
+
+
+def _axis_clauses(prompt):
+    """
+    Detecta expresiones del tipo:
+
+    eje 1 i950
+    eje 2 i550
+    axis 3 i750
+    eje 1 safety advanced
+    """
+
+    text = _normalize(prompt)
+
+    pattern = re.compile(
+        r"(?:eje|axis)\s*"
+        r"(\d+)"
+        r"(.*?)(?=(?:\b(?:eje|axis)\s*\d+\b)|$)",
+        re.IGNORECASE,
+    )
+
+    return [
+        (int(match.group(1)), match.group(2).strip())
+        for match in pattern.finditer(text)
+    ]
+
+
+def _extract_drive(text):
+    text = _normalize(text)
+
+    for drive in SUPPORTED_DRIVES:
+        if re.search(rf"\b{re.escape(drive)}\b", text):
+            return drive
+
+    return None
+
+
+def _extract_safety(text):
+    text = _normalize(text)
+
+    if "advanced safety" in text or "safety advanced" in text:
+        return "Advanced Safety"
+
+    if "basic safety" in text or "safety basic" in text:
+        return "Basic Safety"
+
+    if re.search(r"\badvanced\b", text):
+        return "Advanced Safety"
+
+    if re.search(r"\bbasic\b", text):
+        return "Basic Safety"
+
+    return None
+
+
+def _extract_i950_variant(text):
+    text = _normalize(text)
+
+    if "compact" in text:
+        return "Compact"
+
+    if "normal" in text:
+        return "Normal"
+
+    return None
+
+
+def _extract_traversing_range(text):
+    text = _normalize(text)
+
+    if "infinite" in text:
+        return "INFINITE"
+
+    if "modulo" in text:
+        return "MODULO"
+
+    if "linear" in text:
+        return "LINEAR"
+
+    return None
+
+
+def _extract_kinematics(text):
+    text = _normalize(text)
+
+    if any(x in text for x in ["lead screw", "leadscrew", "husillo", "tornillo"]):
+        return "LEADSCREW"
+
+    if any(x in text for x in ["belt", "correa"]):
+        return "BELT"
+
+    if any(x in text for x in ["rack", "pinion", "cremallera", "pinon"]):
+        return "RACK_PINION"
+
+    if any(x in text for x in ["rotary", "rotativo", "rotativa", "giro"]):
+        return "ROTARY"
+
+    return None
+
+
+def _extract_z_values(text):
+    text = _normalize(text)
+
+    values = {}
+
+    for z in ("z1", "z2", "z3", "z4"):
+        match = re.search(
+            rf"\b{z}\s*[:=]?\s*(-?\d+(?:[.,]\d+)?)",
+            text,
+        )
+
+        if match:
+            values[z] = _number(match.group(1), 1)
+
+    return values
+
+
+def _extract_alias(text):
+    text = _normalize(text)
+
+    match = re.search(
+        r"(?:alias|station\s+alias|direccion|dirección)"
+        r"\s*[:=]?\s*(\d+)",
+        text,
+    )
+
+    if match:
+        return int(match.group(1))
+
+    return None
+
+
+def _extract_c86(text):
+    text = _normalize(text)
+
+    match = re.search(
+        r"(?:c86|motor\s+c86|codigo\s+c86|codigo)"
+        r"\s*[:=]?\s*([a-z0-9._/-]+)",
+        text,
+    )
+
+    if match:
+        return match.group(1)
+
+    return None
+
+
+def _describe_axis(axis, index):
+    parts = [
+        f"Eje {index}",
+        axis.get("name", f"Axis_{index:02d}"),
+    ]
+
+    if axis.get("drive_type"):
+        parts.append(axis["drive_type"])
+
+    if axis.get("kinematics"):
+        parts.append(axis["kinematics"])
+
+    return " — ".join(parts)
+
+
+def local_parse(prompt, current_axes, current_config=None):
+    """
+    Parser local de respaldo.
+
+    Devuelve siempre la misma estructura que espera app.py.
+    """
+
+    axes = _ensure_axes(current_axes)
+
+    original_axes = deepcopy(axes)
+
+    cpu_model = _detect_cpu(prompt)
+    axis_count = _detect_axis_count(prompt)
+
+    if axis_count is not None:
+        while len(axes) < axis_count:
+            axes.append(_new_axis(len(axes) + 1))
+
+        if len(axes) > axis_count:
+            axes = axes[:axis_count]
+
+    changes = []
+    warnings = []
+
+    # --------------------------------------------------------
+    # CPU
+    # --------------------------------------------------------
+
+    if cpu_model:
+        changes.append(f"CPU → {cpu_model.upper()}")
+
+    # --------------------------------------------------------
+    # CAMBIOS POR EJE
+    # --------------------------------------------------------
+
+    clauses = _axis_clauses(prompt)
+
+    for index, clause in clauses:
+
+        if index < 1:
+            continue
+
+        while len(axes) < index:
+            axes.append(_new_axis(len(axes) + 1))
+
+        axis = axes[index - 1]
+        text = _normalize(clause)
+
+        # Drive
+        drive = _extract_drive(text)
+
+        if drive:
+            axis["drive_type"] = drive
+            changes.append(f"Eje {index}: drive → {drive}")
+
+        # Safety
+        safety = _extract_safety(text)
+
+        if safety:
+            axis["safety_variant"] = safety
+            changes.append(f"Eje {index}: safety → {safety}")
+
+        # i950 variant
+        i950_variant = _extract_i950_variant(text)
+
+        if i950_variant and axis.get("drive_type") == "i950":
+            axis["i950_variant"] = i950_variant
+            changes.append(f"Eje {index}: i950 → {i950_variant}")
+
+        # Kinematics
+        kinematics = _extract_kinematics(text)
+
+        if kinematics:
+            axis["kinematics"] = kinematics
+            changes.append(f"Eje {index}: cinemática → {kinematics}")
+
+        # Traversing range
+        traversing = _extract_traversing_range(text)
+
+        if traversing:
+            axis["traversing_range"] = traversing
+            changes.append(
+                f"Eje {index}: traversing range → {traversing}"
+            )
+
+        # Z values
+        z_values = _extract_z_values(text)
+
+        for key, value in z_values.items():
+            axis[key] = value
+            changes.append(f"Eje {index}: {key} → {_formatted_number(value)}")
+
+        # Alias
+        alias = _extract_alias(text)
+
+        if alias is not None:
+            axis["station_alias"] = alias
+            changes.append(f"Eje {index}: station alias → {alias}")
+
+        # C86
+        c86 = _extract_c86(text)
+
+        if c86:
+            axis["motor_code_c86"] = c86
+            changes.append(f"Eje {index}: C86 → {c86}")
+
+        # Feed constant / parámetro cinemático
+        feed_match = re.search(
+            r"(?:feed|feed\s+constant|avance|paso)"
+            r"\s*[:=]?\s*(-?\d+(?:[.,]\d+)?)",
+            text,
+        )
+
+        if feed_match:
+            feed = _number(feed_match.group(1))
+
+            if feed is not None:
+                axis["feed_constant"] = feed
+                axis["kinematic_parameter"] = feed
+
+                changes.append(
+                    f"Eje {index}: feed constant → {_formatted_number(feed)}"
+                )
+
+        # Recalcular feed si se modificó la cinemática o engranajes
+        if kinematics or z_values:
+            axis["feed_constant"] = _feed(
+                axis.get("kinematics"),
+                axis.get("kinematic_parameter"),
+                axis.get("z1"),
+                axis.get("z2"),
+                axis.get("z3"),
+                axis.get("z4"),
+            )
+
+    # --------------------------------------------------------
+    # CAMBIOS GENERALES QUE NO VIENEN COMO "EJE X"
+    # --------------------------------------------------------
+
+    normalized_prompt = _normalize(prompt)
+
+    if not clauses and axis_count == 1:
+
+        axis = axes[0]
+
+        drive = _extract_drive(normalized_prompt)
+
+        if drive:
+            axis["drive_type"] = drive
+            changes.append(f"Eje 1: drive → {drive}")
+
+        safety = _extract_safety(normalized_prompt)
+
+        if safety:
+            axis["safety_variant"] = safety
+            changes.append(f"Eje 1: safety → {safety}")
+
+        kinematics = _extract_kinematics(normalized_prompt)
+
+        if kinematics:
+            axis["kinematics"] = kinematics
+            changes.append(
+                f"Eje 1: cinemática → {kinematics}"
+            )
+
+    # --------------------------------------------------------
+    # ADVERTENCIAS
+    # --------------------------------------------------------
+
+    if not changes and not cpu_model and axis_count is None:
+        warnings.append(
+            "No he detectado ningún cambio concreto en la orden."
+        )
+
+    # --------------------------------------------------------
+    # RESUMEN
+    # --------------------------------------------------------
+
+    if changes:
+        summary = "He preparado los siguientes cambios:\n\n"
+        summary += "\n".join(f"• {change}" for change in changes)
+    else:
+        summary = "No se han detectado cambios concretos."
+
+    return {
+        "axes": axes,
+        "cpu_model": cpu_model,
+        "axis_count": len(axes),
+        "summary": summary,
+        "changes": changes,
+        "warnings": warnings,
+        "source": "local-v3",
+    }
+
+
+# ============================================================
+# OPENAI
+# ============================================================
+
+def _openai_client():
+    """
+    Crea el cliente OpenAI usando exclusivamente la variable
+    OPENAI_API_KEY configurada en Railway.
+    """
+
+    key = os.getenv("OPENAI_API_KEY", "").strip()
+
+    if not key:
+        return None
+
+    from openai import OpenAI
+
+    return OpenAI(api_key=key)
+
+
+def _openai_model():
+    """
+    Modelo utilizado para interpretar las órdenes de Machine Builder.
+
+    No depende de una variable de Railway.
+    """
+
+    return "gpt-5.6-luna"
+
+
+def _build_openai_prompt(prompt, current_axes, current_config=None):
+
+    return f"""
+Eres un asistente experto en Lenze Machine Builder y automatización industrial.
+
+Tu trabajo es interpretar una orden escrita por el usuario y convertirla en una propuesta de configuración.
+
+IMPORTANTE:
+- No ejecutes cambios directamente.
+- Devuelve únicamente una propuesta.
+- Conserva los valores actuales cuando el usuario no pida modificarlos.
+- No inventes valores.
+- Si el usuario no menciona un parámetro, mantenlo exactamente como está.
+- Puedes entender español e inglés.
+- Interpreta expresiones naturales como:
+  "pon 3 ejes",
+  "el eje 1 que sea i950",
+  "eje 2 i550",
+  "pon husillo en el eje 1",
+  "usa Advanced Safety en el eje 3",
+  "pon z1 2 y z2 5 en el eje 1",
+  "CPU C550",
+  etc.
+
+CONFIGURACIÓN ACTUAL DE LOS EJES:
+
+{current_axes}
+
+CONFIGURACIÓN GENERAL ACTUAL:
+
+{current_config}
+
+ORDEN DEL USUARIO:
+
+{prompt}
+
+Devuelve ÚNICAMENTE un objeto JSON válido con esta estructura:
+
+{{
+  "axes": [...],
+  "cpu_model": null,
+  "axis_count": 1,
+  "summary": "Resumen breve en español",
+  "changes": [
+    "Cambio 1",
+    "Cambio 2"
+  ],
+  "warnings": [],
+  "source": "openai"
+}}
+
+REGLAS PARA "axes":
+
+- Debe contener la configuración COMPLETA de todos los ejes.
+- Mantén exactamente los campos existentes.
+- No elimines campos.
+- No cambies valores que el usuario no haya solicitado cambiar.
+- Si el usuario pide cambiar el número de ejes, crea o elimina ejes según corresponda.
+- Los nombres por defecto deben seguir Axis_01, Axis_02, Axis_03...
+- drive_type solamente puede ser:
+  "i550", "i750", "i950"
+- safety_variant solamente puede ser:
+  "Basic Safety" o "Advanced Safety"
+- i950_variant solamente puede ser:
+  "Normal" o "Compact"
+- kinematics solamente puede ser:
+  "ROTARY", "LEADSCREW", "BELT", "RACK_PINION"
+- traversing_range solamente puede ser:
+  "MODULO", "INFINITE", "LINEAR"
+
+No añadas explicaciones fuera del JSON.
+"""
+
+
+def _extract_json(text):
+    """
+    Extrae JSON aunque el modelo haya añadido accidentalmente
+    ```json ... ```
+    """
+
+    if not text:
+        raise ValueError("Respuesta vacía de OpenAI.")
+
+    text = text.strip()
+
+    # Caso ideal
+    try:
+        import json
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # Quitar fences
+    text = re.sub(
+        r"^```(?:json)?\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    text = re.sub(
+        r"\s*```$",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
+
+    try:
+        import json
+        return json.loads(text.strip())
+    except Exception:
+        pass
+
+    # Buscar primer objeto JSON
+    start = text.find("{")
+    end = text.rfind("}")
+
+    if start >= 0 and end > start:
+        import json
+        return json.loads(text[start:end + 1])
+
+    raise ValueError("OpenAI no devolvió un JSON válido.")
+
+
+def _sanitize_axis(axis, index):
+    """
+    Protege la aplicación frente a valores inesperados
+    devueltos por el modelo.
+    """
+
     base = _new_axis(index)
+
     if not isinstance(axis, dict):
         return base
-    base.update(axis)
-    # Valores válidos
-    if base["drive_type"] not in SUPPORTED_DRIVES:
-        base["drive_type"] = "i950"
-    if base["kinematics"] not in SUPPORTED_KINEMATICS:
-        base["kinematics"] = "ROTARY"
-    if base["safety_variant"] not in (
+
+    result = deepcopy(base)
+
+    # Solo copiamos campos que conocemos
+    for key in result.keys():
+
+        if key in axis:
+            result[key] = axis[key]
+
+    # Valores seguros
+    if result["drive_type"] not in SUPPORTED_DRIVES:
+        result["drive_type"] = "i950"
+
+    if result["safety_variant"] not in (
         "Basic Safety",
-        "Extended Safety",
+        "Advanced Safety",
     ):
-        base["safety_variant"] = "Basic Safety"
-    if base["i950_variant"] not in (
+        result["safety_variant"] = "Basic Safety"
+
+    if result["i950_variant"] not in (
         "Normal",
-        "DC-Link",
+        "Compact",
     ):
-        base["i950_variant"] = "Normal"
-    if base["traversing_range"] not in (
+        result["i950_variant"] = "Normal"
+
+    if result["kinematics"] not in SUPPORTED_KINEMATICS:
+        result["kinematics"] = "ROTARY"
+
+    if result["traversing_range"] not in (
         "MODULO",
-        "LIMITED",
+        "INFINITE",
+        "LINEAR",
     ):
-        base["traversing_range"] = (
-            "MODULO"
-            if base["kinematics"] == "ROTARY"
-            else "LIMITED"
-        )
-    # Números
-    integer_fields = (
+        result["traversing_range"] = "MODULO"
+
+    # Tipos numéricos
+    for key in (
         "station_alias",
         "second_station_alias",
         "z1",
         "z2",
         "z3",
         "z4",
-    )
-    for field in integer_fields:
-        try:
-            base[field] = int(base[field])
-        except Exception:
-            base[field] = _new_axis(index)[field]
-    try:
-        base["kinematic_parameter"] = float(
-            base["kinematic_parameter"]
-        )
-    except Exception:
-        base["kinematic_parameter"] = 360.0
-    # Recalcular siempre el Feed Constant.
-    try:
-        base["feed_constant"] = _feed(
-            base["kinematics"],
-            base["kinematic_parameter"],
-        )
-    except Exception:
-        base["feed_constant"] = 360.0
-    base["cycle_length"] = (
-        360.0
-        if base["kinematics"] == "ROTARY"
-        else 0.0
-    )
-    return base
-# ============================================================
-# PARSER LOCAL
-# ============================================================
-def _detect_cpu(text: str) -> Optional[str]:
-    match = re.search(
-        r"\b(?:cpu|controller|controlador)?\s*"
-        r"(c430|c520|c550)\b",
-        text,
-    )
-    return match.group(1) if match else None
-def _detect_axis_count(text: str) -> Optional[int]:
-    patterns = (
-        r"\b(\d+)\s*(?:ejes|eje|axes|axis)\b",
-        r"\b(?:ejes|axes)\s*[:=]?\s*(\d+)\b",
-    )
-    for pattern in patterns:
-        match = re.search(pattern, text)
-        if match:
-            return max(
-                1,
-                min(32, int(match.group(1)))
-            )
-    return None
-def _axis_clauses(text: str) -> List[Tuple[int, str]]:
-    matches = list(
-        re.finditer(
-            r"\b(?:eje|axis)\s*0*(\d+)\b",
-            text,
-        )
-    )
-    clauses = []
-    for pos, match in enumerate(matches):
-        start = match.start()
-        end = (
-            matches[pos + 1].start()
-            if pos + 1 < len(matches)
-            else len(text)
-        )
-        clauses.append(
-            (
-                int(match.group(1)) - 1,
-                text[start:end].strip(" ,;."),
-            )
-        )
-    return clauses
-def _extract_drive(clause: str) -> Optional[str]:
-    match = re.search(
-        r"\b(i550|i750|i950)\b",
-        clause,
-    )
-    return match.group(1) if match else None
-def _extract_safety(clause: str) -> Optional[str]:
-    if re.search(
-        r"\b(?:extended|extendida|es)\s*"
-        r"(?:safety|seguridad)?\b",
-        clause,
+        "kinematic_parameter",
+        "feed_constant",
+        "cycle_length",
     ):
-        return "Extended Safety"
-    if re.search(
-        r"\b(?:basic|basica|básica|bs)\s*"
-        r"(?:safety|seguridad)?\b",
-        clause,
-    ):
-        return "Basic Safety"
-    return None
-def _extract_i950_variant(clause: str) -> Optional[str]:
-    if re.search(r"\bdc[ -]?link\b", clause):
-        return "DC-Link"
-    if re.search(
-        r"\b(?:normal|standard)\b",
-        clause,
-    ) and "i950" in clause:
-        return "Normal"
-    return None
-def _extract_traversing_range(clause: str) -> Optional[str]:
-    if re.search(
-        r"\b(?:limited|limitado|limitada)\b",
-        clause,
-    ):
-        return "LIMITED"
-    if re.search(
-        r"\b(?:modulo|m[oó]dulo|modular)\b",
-        clause,
-    ):
-        return "MODULO"
-    return None
-def _extract_kinematics(
-    clause: str
-) -> Optional[Tuple[str, float]]:
-    number = r"(-?\d+(?:[\.,]\d+)?)"
-    patterns = (
-        (
-            "LEADSCREW",
-            r"\b(?:husillo|leadscrew|lead screw|tornillo)\b"
-            r"[^\d-]*"
-            + number,
-        ),
-        (
-            "BELT",
-            r"\b(?:correa|polea|belt|pulley)\b"
-            r"[^\d-]*"
-            + number,
-        ),
-        (
-            "RACK_PINION",
-            r"\b(?:cremallera|pinon|piñon|"
-            r"rack(?:\s*(?:and|&))?\s*pinion)\b"
-            r"[^\d-]*"
-            + number,
-        ),
-    )
-    if re.search(
-        r"\b(?:rotary|rotativo|rotativa)\b",
-        clause,
-    ):
-        return "ROTARY", 360.0
-    for mode, pattern in patterns:
-        match = re.search(pattern, clause)
-        if match:
-            return mode, _number(match.group(1))
-    return None
-def _extract_z_values(clause: str) -> Dict[str, int]:
-    values = {}
-    for index in (1, 2, 3, 4):
-        patterns = (
-            r"\bz{0}\s*(?:=|:|a)?\s*(-?\d+)\b"
-            .format(index),
-            r"\bz\s*{0}\s*(?:=|:|a)?\s*(-?\d+)\b"
-            .format(index),
-        )
-        for pattern in patterns:
-            match = re.search(pattern, clause)
-            if match:
-                values[
-                    "z{0}".format(index)
-                ] = int(match.group(1))
-                break
-    return values
-def _extract_alias(
-    clause: str,
-    second: bool = False
-) -> Optional[int]:
-    if second:
-        pattern = (
-            r"\b(?:second|segundo|2nd)"
-            r"\s*(?:station\s*)?alias"
-            r"\s*(?:=|:)?\s*(\d+)\b"
-        )
-    else:
-        pattern = (
-            r"(?<!second )"
-            r"(?<!segundo )"
-            r"(?<!2nd )"
-            r"\b(?:station\s*)?alias"
-            r"\s*(?:=|:)?\s*(\d+)\b"
-        )
-    match = re.search(pattern, clause)
-    return (
-        int(match.group(1))
-        if match
-        else None
-    )
-def _extract_c86(clause: str) -> Optional[str]:
-    match = re.search(
-        r"\bc86\s*(?:=|:)?\s*"
-        r"([a-z0-9._-]+)\b",
-        clause,
-    )
-    return (
-        match.group(1).upper()
-        if match
-        else None
-    )
-def _describe_axis(
-    axis: Dict[str, Any]
-) -> str:
-    return (
-        "{name}: {drive}, {safety}, {kin}, "
-        "parámetro {parameter}, Feed {feed}, "
-        "{traversing}, Z1={z1}, Z2={z2}, "
-        "Z3={z3}, Z4={z4}"
-    ).format(
-        name=axis.get("name"),
-        drive=axis.get("drive_type"),
-        safety=axis.get("safety_variant"),
-        kin=axis.get("kinematics"),
-        parameter=axis.get("kinematic_parameter"),
-        feed=axis.get("feed_constant"),
-        traversing=axis.get("traversing_range"),
-        z1=axis.get("z1"),
-        z2=axis.get("z2"),
-        z3=axis.get("z3"),
-        z4=axis.get("z4"),
-    )
-def local_parse(
-    prompt: str,
-    current_axes: List[Dict[str, Any]],
-    current_config: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    text = _normalize(prompt)
-    axes = deepcopy(current_axes or [])
-    changes: List[str] = []
-    warnings: List[str] = []
-    cpu_model = _detect_cpu(text)
-    if cpu_model:
-        changes.append("CPU: " + cpu_model)
-    count = _detect_axis_count(text)
-    if count is not None:
-        axes = _ensure_axes(
-            axes,
-            count,
-        )
-        changes.append(
-            "Número de ejes: {0}".format(count)
-        )
-    elif not axes:
-        axes = [_new_axis(1)]
-    clauses = _axis_clauses(text)
-    if not clauses and len(axes) == 1:
-        clauses = [(0, text)]
-    for axis_index, clause in clauses:
-        if axis_index < 0 or axis_index >= 32:
-            warnings.append(
-                "Número de eje fuera de rango: {0}"
-                .format(axis_index + 1)
-            )
-            continue
-        axes = _ensure_axes(
-            axes,
-            max(len(axes), axis_index + 1),
-        )
-        axis = axes[axis_index]
-        drive = _extract_drive(clause)
-        safety = _extract_safety(clause)
-        variant = _extract_i950_variant(clause)
-        traversing = _extract_traversing_range(clause)
-        kinematics = _extract_kinematics(clause)
-        z_values = _extract_z_values(clause)
-        alias = _extract_alias(clause, False)
-        second_alias = _extract_alias(clause, True)
-        c86 = _extract_c86(clause)
-        if drive:
-            axis["drive_type"] = drive
-            if (
-                drive == "i550"
-                and safety == "Extended Safety"
-            ):
-                warnings.append(
-                    "{0}: i550 + Extended Safety "
-                    "requiere revisión manual."
-                    .format(axis["name"])
-                )
-        if safety:
-            axis["safety_variant"] = safety
-        if variant:
-            axis["i950_variant"] = variant
-        elif drive and drive != "i950":
-            axis["i950_variant"] = "Normal"
-        if traversing:
-            axis["traversing_range"] = traversing
-        if kinematics:
-            mode, parameter = kinematics
-            axis["kinematics"] = mode
-            axis["kinematic_parameter"] = parameter
-            axis["feed_constant"] = _feed(
-                mode,
-                parameter,
-            )
-            axis["cycle_length"] = (
-                360.0
-                if mode == "ROTARY"
-                else 0.0
-            )
-            if not traversing:
-                axis["traversing_range"] = (
-                    "MODULO"
-                    if mode == "ROTARY"
-                    else "LIMITED"
-                )
-        axis.update(z_values)
-        if alias is not None:
-            axis["station_alias"] = alias
-        if second_alias is not None:
-            axis["second_station_alias"] = second_alias
-        if c86:
-            axis["motor_code_c86"] = c86
-        changes.append(
-            _describe_axis(axis)
-        )
-    station_sequence = re.search(
-        r"\b(?:station\s*)?aliases?\s*"
-        r"(?:desde|from|a partir de)\s*(\d+)\b",
-        text,
-    )
-    second_sequence = re.search(
-        r"\b(?:second|segundo|2nd)\s*"
-        r"(?:station\s*)?aliases?\s*"
-        r"(?:desde|from|a partir de)\s*(\d+)\b",
-        text,
-    )
-    if station_sequence:
-        start = int(
-            station_sequence.group(1)
-        )
-        for pos, axis in enumerate(axes):
-            axis["station_alias"] = start + pos
-        changes.append(
-            "Station Alias secuencial desde {0}"
-            .format(start)
-        )
-    if second_sequence:
-        start = int(
-            second_sequence.group(1)
-        )
-        for pos, axis in enumerate(axes):
-            axis["second_station_alias"] = start + pos
-        changes.append(
-            "Second Station Alias secuencial desde {0}"
-            .format(start)
-        )
-    if not changes:
-        warnings.append(
-            "No se identificaron cambios. "
-            "Ejemplo: CPU c520, 1 eje, eje 1 i750 "
-            "Extended Safety, correa 100, LIMITED, "
-            "Z1 10, Z2 20, Z3 30, Z4 40."
-        )
-    return {
-        "axes": axes,
-        "cpu_model": cpu_model,
-        "axis_count": len(axes),
-        "summary": "\n\n".join(
-            changes
-            + (
-                ["Avisos: " + " ".join(warnings)]
-                if warnings
-                else []
-            )
-        ),
-        "changes": changes,
-        "warnings": warnings,
-        "source": "local-v3",
-    }
-# ============================================================
-# OPENAI
-# ============================================================
-def _openai_client():
-    key = os.getenv(
-        "OPENAI_API_KEY",
-        ""
-    ).strip()
-    if not key:
-        return None
-    from openai import OpenAI
-    return OpenAI(api_key=key)
-def _openai_model():
-    return os.getenv(
-        "OPENAI_MODEL",
-        "gpt-5.6-luna",
-    ).strip()
-def _build_openai_prompt(
-    prompt: str,
-    current_axes: List[Dict[str, Any]],
-    current_config: Optional[Dict[str, Any]],
-) -> str:
-    schema = {
-        "axes": [
-            {
-                "enabled": True,
-                "name": "Axis_01",
-                "drive_type": "i950",
-                "safety_variant": "Basic Safety",
-                "i950_variant": "Normal",
-                "station_alias": 1001,
-                "second_station_alias": 2001,
-                "motor_code_c86": "",
-                "kinematics": "ROTARY",
-                "kinematic_parameter": 360.0,
-                "z1": 1,
-                "z2": 1,
-                "z3": 1,
-                "z4": 1,
-                "traversing_range": "MODULO",
-            }
-        ],
-        "cpu_model": None,
-        "summary": "",
-        "changes": [],
-        "warnings": [],
-    }
-    return f"""
-Eres el asistente técnico de una aplicación llamada
-Lenze Machine Builder Web.
-Tu trabajo es interpretar la petición del usuario y convertirla
-en una propuesta de configuración de una máquina.
-IMPORTANTE:
-- NO inventes parámetros que el usuario no haya solicitado.
-- Conserva los valores actuales cuando el usuario no los cambie.
-- Nunca apliques la configuración: solo devuelve una propuesta.
-- CPU permitidas: c430, c520, c550.
-- Drives permitidos: i550, i750, i950.
-- Kinematics permitidas: ROTARY, LEADSCREW, BELT, RACK_PINION.
-- Safety permitido: Basic Safety, Extended Safety.
-- i950_variant permitido: Normal, DC-Link.
-- Traversing Range permitido: MODULO, LIMITED.
-REGLAS DE CÁLCULO:
-ROTARY:
-    feed_constant = 360
-LEADSCREW:
-    feed_constant = kinematic_parameter
-BELT:
-    feed_constant = pi * kinematic_parameter
-RACK_PINION:
-    feed_constant = pi * kinematic_parameter
-Para ROTARY:
-    cycle_length = 360
-Para cualquier otra cinemática:
-    cycle_length = 0
-Si el usuario no especifica un valor,
-mantén el valor actual.
-CONFIGURACIÓN ACTUAL:
-{json.dumps(current_axes, ensure_ascii=False, indent=2)}
-CONFIGURACIÓN GENERAL ACTUAL:
-{json.dumps(current_config or {{}}, ensure_ascii=False, indent=2)}
-PETICIÓN DEL USUARIO:
-{prompt}
-Devuelve ÚNICAMENTE JSON válido.
-La estructura debe ser:
-{json.dumps(schema, ensure_ascii=False, indent=2)}
-"""
-def _extract_json(text: str) -> Dict[str, Any]:
-    text = text.strip()
-    # Caso normal
-    try:
-        return json.loads(text)
-    except Exception:
-        pass
-    # El modelo puede devolver ```json ... ```
-    match = re.search(
-        r"```(?:json)?\s*(.*?)\s*```",
-        text,
-        re.DOTALL | re.IGNORECASE,
-    )
-    if match:
-        return json.loads(
-            match.group(1)
-        )
-    # Buscar el primer objeto JSON
-    start = text.find("{")
-    end = text.rfind("}")
-    if start >= 0 and end > start:
-        return json.loads(
-            text[start:end + 1]
-        )
-    raise ValueError(
-        "OpenAI no devolvió un JSON válido."
-    )
-def _openai_interpret(
-    prompt: str,
-    current_axes: List[Dict[str, Any]],
-    current_config: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+        if key in result:
+            value = _number(result[key], None)
+
+            if value is not None:
+                if key in (
+                    "station_alias",
+                    "second_station_alias",
+                ):
+                    result[key] = int(value)
+                else:
+                    result[key] = value
+
+    # Boolean
+    result["enabled"] = bool(result.get("enabled", True))
+
+    return result
+
+
+def _openai_interpret(prompt, current_axes, current_config=None):
+
     client = _openai_client()
+
     if client is None:
         raise RuntimeError(
             "OPENAI_API_KEY no está configurada."
         )
+
     response = client.responses.create(
         model=_openai_model(),
-        input=[
-            {
-                "role": "system",
-                "content": (
-                    "Devuelve exclusivamente JSON válido. "
-                    "No uses Markdown."
-                ),
-            },
-            {
-                "role": "user",
-                "content": _build_openai_prompt(
-                    prompt,
-                    current_axes,
-                    current_config,
-                ),
-            },
-        ],
+        instructions=(
+            "Devuelve exclusivamente JSON válido. "
+            "No escribas markdown ni explicaciones fuera del JSON."
+        ),
+        input=_build_openai_prompt(
+            prompt,
+            current_axes,
+            current_config,
+        ),
     )
-    raw = response.output_text
-    result = _extract_json(raw)
-    axes = result.get("axes", [])
-    if not isinstance(axes, list):
+
+    raw = getattr(response, "output_text", None)
+
+    if not raw:
         raise ValueError(
-            "La respuesta de OpenAI no contiene "
-            "una lista válida de ejes."
+            "OpenAI no devolvió texto."
         )
-    axes = [
-        _sanitize_axis(
-            axis,
-            index + 1,
+
+    data = _extract_json(raw)
+
+    if not isinstance(data, dict):
+        raise ValueError(
+            "La respuesta de OpenAI no es un objeto JSON."
         )
-        for index, axis in enumerate(axes)
-    ]
-    # Limitar a 32 ejes
-    axes = axes[:32]
-    cpu_model = result.get("cpu_model")
+
+    # --------------------------------------------------------
+    # Ejes
+    # --------------------------------------------------------
+
+    returned_axes = data.get("axes")
+
+    if not isinstance(returned_axes, list):
+        raise ValueError(
+            "OpenAI no devolvió una lista de ejes válida."
+        )
+
+    axes = []
+
+    for index, axis in enumerate(returned_axes, start=1):
+        axes.append(
+            _sanitize_axis(axis, index)
+        )
+
+    if not axes:
+        axes = _ensure_axes(current_axes)
+
+    # --------------------------------------------------------
+    # CPU
+    # --------------------------------------------------------
+
+    cpu_model = data.get("cpu_model")
+
     if cpu_model:
-        cpu_model = str(
-            cpu_model
-        ).lower()
+        cpu_model = str(cpu_model).lower()
+
         if cpu_model not in SUPPORTED_CPUS:
             cpu_model = None
-    warnings = result.get("warnings", [])
-    if not isinstance(warnings, list):
-        warnings = [str(warnings)]
-    changes = result.get("changes", [])
+
+    # --------------------------------------------------------
+    # Resultado
+    # --------------------------------------------------------
+
+    changes = data.get("changes", [])
+
     if not isinstance(changes, list):
-        changes = [str(changes)]
+        changes = []
+
+    changes = [
+        str(change)
+        for change in changes
+    ]
+
+    warnings = data.get("warnings", [])
+
+    if not isinstance(warnings, list):
+        warnings = []
+
+    warnings = [
+        str(warning)
+        for warning in warnings
+    ]
+
     summary = str(
-        result.get(
+        data.get(
             "summary",
-            "Propuesta generada por OpenAI.",
+            "Propuesta preparada.",
         )
     )
+
     return {
         "axes": axes,
         "cpu_model": cpu_model,
@@ -682,28 +846,88 @@ def _openai_interpret(
         "warnings": warnings,
         "source": "openai",
     }
+
+
+# ============================================================
+# INTERPRETACIÓN PRINCIPAL
+# ============================================================
+
+def interpret(prompt, current_axes, current_config=None):
+    """
+    Primero intenta interpretar con OpenAI.
+
+    Si OpenAI no está disponible, hay un error de API,
+    el modelo falla o devuelve algo incorrecto, utiliza
+    automáticamente el parser local.
+    """
+
+    prompt = str(prompt or "").strip()
+
+    if not prompt:
+        return local_parse(
+            prompt,
+            current_axes,
+            current_config,
+        )
+
+    try:
+        return _openai_interpret(
+            prompt,
+            current_axes,
+            current_config,
+        )
+
+    except Exception as exc:
+
+        local_result = local_parse(
+            prompt,
+            current_axes,
+            current_config,
+        )
+
+        # Informamos del fallback sin romper la aplicación.
+        local_result.setdefault("warnings", [])
+
+        local_result["warnings"].insert(
+            0,
+            "OpenAI no pudo interpretar la orden; "
+            "se ha utilizado el intérprete local."
+        )
+
+        local_result["openai_error"] = str(exc)
+
+        return local_result
+
+
 # ============================================================
 # TRANSCRIPCIÓN DE VOZ
 # ============================================================
-def transcribe_audio(
-    audio_bytes: bytes,
-    filename: str = "voice.wav",
-) -> str:
-    key = os.getenv(
-        "OPENAI_API_KEY",
-        ""
-    ).strip()
+
+def transcribe_audio(audio_bytes, filename="audio.wav"):
+    """
+    Transcribe audio utilizando OpenAI.
+
+    Si OPENAI_TRANSCRIPTION_MODEL no existe en Railway,
+    utiliza automáticamente gpt-4o-mini-transcribe.
+    """
+
+    key = os.getenv("OPENAI_API_KEY", "").strip()
+
     if not key:
         raise RuntimeError(
-            "La voz requiere configurar "
-            "OPENAI_API_KEY en Railway."
+            "La voz requiere configurar OPENAI_API_KEY en Railway."
         )
+
     from openai import OpenAI
-    client = OpenAI(
-        api_key=key
-    )
+
+    client = OpenAI(api_key=key)
+
+    if not audio_bytes:
+        raise ValueError("No se recibió audio.")
+
     stream = io.BytesIO(audio_bytes)
     stream.name = filename
+
     result = client.audio.transcriptions.create(
         model=os.getenv(
             "OPENAI_TRANSCRIPTION_MODEL",
@@ -711,44 +935,5 @@ def transcribe_audio(
         ),
         file=stream,
     )
+
     return result.text
-# ============================================================
-# FUNCIÓN PÚBLICA
-# ============================================================
-def interpret(
-    prompt: str,
-    current_axes: List[Dict[str, Any]],
-    current_config: Optional[Dict[str, Any]] = None,
-) -> Dict[str, Any]:
-    """
-    Intenta primero interpretar mediante OpenAI.
-    Si OpenAI no está disponible o devuelve una respuesta
-    inválida, utiliza automáticamente el parser local.
-    """
-    try:
-        result = _openai_interpret(
-            prompt,
-            current_axes,
-            current_config,
-        )
-        return result
-    except Exception as error:
-        # No rompemos la aplicación si OpenAI falla.
-        local_result = local_parse(
-            prompt,
-            current_axes,
-            current_config,
-        )
-        local_result["warnings"].append(
-            "OpenAI no disponible; se utilizó "
-            "el intérprete local. Detalle: {0}"
-            .format(str(error))
-        )
-        local_result["summary"] = (
-            local_result.get("summary", "")
-            + "\n\n"
-            + "⚠️ OpenAI no disponible; "
-              "se utilizó el intérprete local."
-        )
-        local_result["source"] = "local-fallback"
-        return local_result
