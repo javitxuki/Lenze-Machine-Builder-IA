@@ -427,13 +427,47 @@ def render_machine_assistant():
             key="machine_assistant_chat"
         )
 
-        audio = st.audio_input("🎤 Dictar configuración", sample_rate=16000, key="machine_assistant_audio")
+        transcription_engine = st.radio(
+            "Motor de transcripción",
+            options=("local", "openai"),
+            format_func=lambda value: (
+                "Local gratuito (Faster-Whisper)"
+                if value == "local"
+                else "OpenAI API"
+            ),
+            horizontal=True,
+            key="transcription_engine",
+            help=(
+                "El modo local procesa el audio en el servidor. "
+                "OpenAI requiere OPENAI_API_KEY."
+            ),
+        )
+        if transcription_engine == "local":
+            st.caption(
+                "La primera transcripción puede tardar más mientras se descarga y carga "
+                "el modelo local. Después se reutiliza en memoria."
+            )
+        audio = st.audio_input(
+            "🎤 Dictar configuración",
+            sample_rate=16000,
+            key="machine_assistant_audio",
+        )
         if audio is not None:
-            audio_id = "{0}:{1}".format(getattr(audio, "name", "audio.wav"), len(audio.getvalue()))
+            audio_bytes = audio.getvalue()
+            audio_id = "{0}:{1}:{2}".format(
+                transcription_engine,
+                getattr(audio, "name", "audio.wav"),
+                len(audio_bytes),
+            )
             if audio_id != st.session_state.last_audio_id:
                 st.session_state.last_audio_id = audio_id
                 try:
-                    prompt = ai_transcribe_audio(audio.getvalue(), getattr(audio, "name", "voice.wav"))
+                    with st.spinner("Transcribiendo audio..."):
+                        prompt = ai_transcribe_audio(
+                            audio_bytes,
+                            getattr(audio, "name", "voice.wav"),
+                            engine=transcription_engine,
+                        )
                     st.info("Transcripción: " + prompt)
                 except Exception as error:
                     st.error(str(error))

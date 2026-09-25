@@ -905,37 +905,84 @@ def interpret(prompt, current_axes, current_config=None):
 # TRANSCRIPCIÓN DE VOZ
 # ============================================================
 
-def transcribe_audio(audio_bytes, filename="audio.wav"):
-    """
-    Transcribe audio utilizando OpenAI.
-
-    Si OPENAI_TRANSCRIPTION_MODEL no existe en Railway,
-    utiliza automáticamente gpt-4o-mini-transcribe.
-    """
-
+def _transcribe_audio_openai(audio_bytes, filename):
+    """Transcribe el audio mediante la API de OpenAI."""
     key = os.getenv("OPENAI_API_KEY", "").strip()
-
     if not key:
-        raise RuntimeError(
-            "La voz requiere configurar OPENAI_API_KEY en Railway."
-        )
-
+        raise RuntimeError("Para usar OpenAI debes configurar OPENAI_API_KEY en Railway.")
     from openai import OpenAI
-
-    client = OpenAI(api_key=key)
-
-    if not audio_bytes:
-        raise ValueError("No se recibió audio.")
-
     stream = io.BytesIO(audio_bytes)
     stream.name = filename
-
-    result = client.audio.transcriptions.create(
-        model=os.getenv(
-            "OPENAI_TRANSCRIPTION_MODEL",
-            "gpt-4o-mini-transcribe",
-        ),
+    result = OpenAI(api_key=key).audio.transcriptions.create(
+        model=os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe"),
         file=stream,
     )
+    text = str(result.text or "").strip()
+    if not text:
+        raise ValueError("OpenAI no devolvió ninguna transcripción.")
+    return text
 
-    return result.text
+
+def _local_whisper_settings():
+    return (
+        os.getenv("WHISPER_MODEL", "small").strip() or "small",
+        os.getenv("WHISPER_DEVICE", "cpu").strip() or "cpu",
+        os.getenv("WHISPER_COMPUTE_TYPE", "int8").strip() or "int8",
+    )
+
+
+def _local_whisper_model():
+    """Carga y conserva una única instancia de Faster-Whisper por proceso."""
+    settings = _local_whisper_settings()
+    if getattr(_local_whisper_model, "_settings", None) != settings:
+        from faster_whisper import WhisperModel
+        _local_whisper_model._model = WhisperModel(
+            settings[0], device=settings[1], compute_type=settings[2]
+        )
+        _local_whisper_model._settings = settings
+    return _local_whisper_model._model
+
+
+def _transcribe_audio_local(audio_bytes, filename):
+    """Transcribe localmente con Faster-Whisper, sin utilizar API."""
+    import tempfile
+    from pathlib import Path
+    suffix = Path(filename or "audio.wav").suffix or ".wav"
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_audio:
+            temp_audio.write(audio_bytes)
+            temp_path = temp_audio.name
+        language = os.getenv("WHISPER_LANGUAGE", "es").strip() or None
+        segments, _ = _local_whisper_model().transcribe(
+            temp_path,
+            language=language,
+            vad_filter=True,
+            beam_size=5,
+        )
+        text = " ".join(
+            segment.text.strip()
+            for segment in segments
+            if segment.text and segment.text.strip()
+        ).strip()
+        if not text:
+            raise ValueError("No se ha detectado voz en el audio.")
+        return text
+    finally:
+        if temp_path:
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+
+
+def transcribe_audio(audio_bytes, filename="audio.wav", engine="local"):
+    """Transcribe con Faster-Whisper local o con la API de OpenAI."""
+    if not audio_bytes:
+        raise ValueError("No se recibió audio.")
+    selected_engine = str(engine or "local").strip().lower()
+    if selected_engine == "local":
+        return _transcribe_audio_local(audio_bytes, filename)
+    if selected_engine == "openai":
+        return _transcribe_audio_openai(audio_bytes, filename)
+    raise ValueError("Motor no reconocido. Usa 'local' u 'openai'.")
