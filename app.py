@@ -867,35 +867,35 @@ st.session_state.robot_groups = (
 )
 
 axis_names = [
-axis["name"]
-for axis in st.session_state.axes
+    axis["name"]
+    for axis in st.session_state.axes
 ]
 
 for group_index, group in enumerate(
     st.session_state.robot_groups
 ):
 
-with st.expander(
-    f"Grupo {group_index + 1}",
-    expanded=(group_index == 0)
-):
+    with st.expander(
+        f"Grupo {group_index + 1}",
+        expanded=(group_index == 0)
+    ):
 
-col1, col2 = st.columns(2)
+        col1, col2 = st.columns(2)
 
-group["name"] = col1.text_input(
-"Nombre grupo",
-value=group["name"],
-key=f"group_name_{group_index}"
-)
+        group["name"] = col1.text_input(
+            "Nombre grupo",
+            value=group["name"],
+            key=f"group_name_{group_index}"
+        )
 
-group["type"] = col2.selectbox(
-"Tipo robot",
-options=list(ROBOT_TYPES.keys()),
-index=list(
-ROBOT_TYPES.keys()
-).index(
-group["type"]
-),
+        group["type"] = col2.selectbox(
+            "Tipo robot",
+            options=list(ROBOT_TYPES.keys()),
+            index=list(
+                ROBOT_TYPES.keys()
+            ).index(
+            group["type"]
+            ),
 key=f"group_type_{group_index}"
 )
 
@@ -912,7 +912,7 @@ min(len(roles), 4)
 for role_index, role in enumerate(roles):
 
     col = group_cols[
-    role_index % len(group_cols)
+        role_index % len(group_cols)
     ]
 
     selected_axis = col.selectbox(
