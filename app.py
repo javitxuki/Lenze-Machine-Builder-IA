@@ -894,46 +894,46 @@ for group_index, group in enumerate(
             index=list(
                 ROBOT_TYPES.keys()
             ).index(
-            group["type"]
+                group["type"]
             ),
-key=f"group_type_{group_index}"
-)
+            key=f"group_type_{group_index}"
+        )
 
-roles = ROBOT_TYPES[
-group["type"]
-]
+        roles = ROBOT_TYPES[
+            group["type"]
+        ]
 
-new_mapping = {}
+        new_mapping = {}
 
-group_cols = st.columns(
-min(len(roles), 4)
-)
+        group_cols = st.columns(
+            min(len(roles), 4)
+        )
 
-for role_index, role in enumerate(roles):
+        for role_index, role in enumerate(roles):
 
-    col = group_cols[
-        role_index % len(group_cols)
-    ]
+            col = group_cols[
+                role_index % len(group_cols)
+            ]
 
-    selected_axis = col.selectbox(
-        role,
-        options=axis_names,
-        key=f"group_{group_index}_{role}"
-    )
+            selected_axis = col.selectbox(
+                role,
+                options=axis_names,
+                key=f"group_{group_index}_{role}"
+            )
 
-    new_mapping[role] = selected_axis
+            new_mapping[role] = selected_axis
 
-group["axes"] = new_mapping
+        group["axes"] = new_mapping
 
-selected_axes = list(
-    new_mapping.values()
-)
+        selected_axes = list(
+            new_mapping.values()
+        )
 
-if len(selected_axes) != len(set(selected_axes)):
+        if len(selected_axes) != len(set(selected_axes)):
 
-    st.error(
-        "Hay ejes repetidos dentro del grupo."
-    )
+            st.error(
+                "Hay ejes repetidos dentro del grupo."
+            )
 
 configuration = {
     "format": "LenzeMachineBuilderWeb",
