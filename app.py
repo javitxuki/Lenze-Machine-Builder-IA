@@ -628,10 +628,25 @@ if "robot_groups" not in st.session_state:
 # Aplicar una configuración cargada desde la zona inferior.
 # Se procesa al inicio del nuevo rerun, antes de crear los widgets.
 if st.session_state.get("pending_loaded_configuration") is not None:
-    loaded = st.session_state.pop("pending_loaded_configuration")
+
+    loaded = st.session_state.pop(
+        "pending_loaded_configuration"
+    )
 
     clear_axis_widget_state()
-    st.session_state.axes = loaded.get("axes", st.session_state.axes)
+
+    st.session_state.axes = loaded.get(
+        "axes",
+        st.session_state.axes
+    )
+
+    st.session_state.robot_groups = loaded.get(
+        "robot_groups",
+        []
+    )
+
+    st.session_state.robot_groups = loaded.get("robot_groups",[])
+
 
     if loaded.get("cpu_model") in CPU_MODELS:
         st.session_state["cpu_model"] = loaded["cpu_model"]
@@ -888,13 +903,23 @@ for group_index, group in enumerate(
             key=f"group_name_{group_index}"
         )
 
+        robot_types = list(
+            ROBOT_TYPES.keys()
+        )
+
+        current_type = group.get(
+            "type",
+            "CARTESIAN_3D"
+        )
+
+        if current_type not in robot_types:
+            current_type = "CARTESIAN_3D"
+
         group["type"] = col2.selectbox(
             "Tipo robot",
-            options=list(ROBOT_TYPES.keys()),
-            index=list(
-                ROBOT_TYPES.keys()
-            ).index(
-                group["type"]
+            options=robot_types,
+            index=robot_types.index(
+                current_type
             ),
             key=f"group_type_{group_index}"
         )
@@ -915,9 +940,27 @@ for group_index, group in enumerate(
                 role_index % len(group_cols)
             ]
 
+            current_axis = (
+                group.get(
+                    "axes",
+                    {}
+                ).get(role)
+            )
+
+            if (
+                current_axis not in axis_names
+                and len(axis_names) > 0
+            ):
+                current_axis = axis_names[0]
+
             selected_axis = col.selectbox(
                 role,
                 options=axis_names,
+                index=(
+                    axis_names.index(current_axis)
+                    if current_axis in axis_names
+                    else 0
+                ),
                 key=f"group_{group_index}_{role}"
             )
 
