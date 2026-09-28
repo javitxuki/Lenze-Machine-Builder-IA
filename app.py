@@ -8,6 +8,16 @@ import streamlit as st
 from machine_builder_core import *
 from auth import init_auth_state, authenticate, logout, change_password
 
+ROBOT_TYPES = {
+"CARTESIAN_2D": ["X", "Y"],
+"CARTESIAN_3D": ["X", "Y", "Z"],
+"GANTRY": ["X1", "X2", "Y", "Z"],
+"SCARA": ["J1", "J2", "Z", "R"],
+"DELTA": ["ARM1", "ARM2", "ARM3"],
+"ARTICULATED_6_AXIS": ["J1", "J2", "J3", "J4", "J5", "J6"],
+"CUSTOM": ["AXIS1", "AXIS2", "AXIS3", "AXIS4", "AXIS5", "AXIS6"]
+}
+
 st.set_page_config(
     page_title="Lenze Machine Builder Web",
     page_icon="⚙️",
@@ -611,6 +621,10 @@ if "axes" not in st.session_state:
         for index in range(1, 3)
     ]
 
+if "robot_groups" not in st.session_state:
+    st.session_state.robot_groups = []
+
+
 # Aplicar una configuración cargada desde la zona inferior.
 # Se procesa al inicio del nuevo rerun, antes de crear los widgets.
 if st.session_state.get("pending_loaded_configuration") is not None:
@@ -825,6 +839,101 @@ for i, axis in enumerate(st.session_state.axes):
                 disabled=True,
                 help=str(error),
             )
+st.markdown("---")
+
+st.subheader("🤖 Robot Groups")
+
+group_count = st.number_input(
+"Número de grupos",
+min_value=0,
+max_value=16,
+value=len(st.session_state.robot_groups),
+step=1,
+key="robot_group_count"
+)
+
+while len(st.session_state.robot_groups) < group_count:
+
+    st.session_state.robot_groups.append(
+        {
+            "name": f"RobotGroup_{len(st.session_state.robot_groups)+1:02}",
+            "type": "CARTESIAN_3D",
+            "axes": {}
+        }
+    )
+
+st.session_state.robot_groups = (
+    st.session_state.robot_groups[:group_count]
+)
+
+axis_names = [
+axis["name"]
+for axis in st.session_state.axes
+]
+
+for group_index, group in enumerate(
+    st.session_state.robot_groups
+):
+
+with st.expander(
+    f"Grupo {group_index + 1}",
+    expanded=(group_index == 0)
+):
+
+col1, col2 = st.columns(2)
+
+group["name"] = col1.text_input(
+"Nombre grupo",
+value=group["name"],
+key=f"group_name_{group_index}"
+)
+
+group["type"] = col2.selectbox(
+"Tipo robot",
+options=list(ROBOT_TYPES.keys()),
+index=list(
+ROBOT_TYPES.keys()
+).index(
+group["type"]
+),
+key=f"group_type_{group_index}"
+)
+
+roles = ROBOT_TYPES[
+group["type"]
+]
+
+new_mapping = {}
+
+group_cols = st.columns(
+min(len(roles), 4)
+)
+
+for role_index, role in enumerate(roles):
+
+    col = group_cols[
+    role_index % len(group_cols)
+    ]
+
+    selected_axis = col.selectbox(
+        role,
+        options=axis_names,
+        key=f"group_{group_index}_{role}"
+    )
+
+    new_mapping[role] = selected_axis
+
+group["axes"] = new_mapping
+
+selected_axes = list(
+    new_mapping.values()
+)
+
+if len(selected_axes) != len(set(selected_axes)):
+
+    st.error(
+        "Hay ejes repetidos dentro del grupo."
+    )
 
 configuration = {
     "format": "LenzeMachineBuilderWeb",
@@ -839,7 +948,8 @@ configuration = {
     ),
     "project_path": project_path,
     "axes": st.session_state.axes,
-    "robot_groups": [],
+    "robot_groups": 
+        st.session_state.robot_groups,
 }
 
 validation_errors = validate_config(configuration)
