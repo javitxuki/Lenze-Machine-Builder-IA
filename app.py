@@ -6,7 +6,7 @@ from pathlib import Path
 import streamlit as st
 
 from machine_builder_core import (
-    AxisConfig, CPU_MODELS, DRIVES, I950_VARIANTS, KINEMATICS, ROBOT_TYPES, SAFETY,
+    AxisConfig, CPU_MODELS, DRIVES, I950_VARIANTS, IDENTIFICATION_MODES, KINEMATICS, ROBOT_TYPES, SAFETY,
     TRAVERSING, calculate_feed_constant, config_json, cpu_options, drive_options,
     format_decimal, generate_plc_script, load_repository, master_options,
     normalize_axis, validate_config,
@@ -131,6 +131,11 @@ TEXTS = {
         "cpu_desc": "Descriptor CPU",
         "master": "EtherCAT Master",
         "path": "Ruta destino del proyecto PLC Designer",
+        "ident": "Identificación EtherCAT de los drives",
+        "ident_NONE": "Ninguna",
+        "ident_STATION_ALIAS": "Station Alias (ADO 0x0012)",
+        "ident_EXPLICIT_DEVICE_ID": "Explicit Device ID (ADO 0x0134)",
+        "ident_help": "El maestro comprobará que cada drive lleva el valor del campo Alias. Si un drive no lo tiene grabado, NO arranca en el bus. El Second Alias no se escribe en el proyecto.",
         "axes_n": "Número de ejes",
         "axes": "Ejes",
         "active": "Activo",
@@ -208,6 +213,11 @@ TEXTS = {
         "cpu_desc": "CPU descriptor",
         "master": "EtherCAT Master",
         "path": "PLC Designer project destination path",
+        "ident": "EtherCAT identification of the drives",
+        "ident_NONE": "None",
+        "ident_STATION_ALIAS": "Station Alias (ADO 0x0012)",
+        "ident_EXPLICIT_DEVICE_ID": "Explicit Device ID (ADO 0x0134)",
+        "ident_help": "The master will check that each drive carries the value of its Alias field. A drive without it does NOT start on the bus. The Second Alias is not written to the project.",
         "axes_n": "Number of axes",
         "axes": "Axes",
         "active": "Enabled",
@@ -537,6 +547,7 @@ if "axes" not in st.session_state:
 st.session_state.setdefault("robot_groups", [])
 st.session_state.setdefault("cpu_model", "c550")
 st.session_state.setdefault("project_path", r"C:\Temp\LenzeMachine_Auto.project")
+st.session_state.setdefault("ethercat_identification", "NONE")
 
 # Una configuracion cargada se aplica al principio del rerun, antes de crear controles.
 loaded = st.session_state.pop("pending_loaded_configuration", None)
@@ -549,6 +560,8 @@ if loaded is not None:
         st.session_state["cpu_model"] = loaded["cpu_model"]
     if loaded.get("project_path"):
         st.session_state["project_path"] = str(loaded["project_path"])
+    if loaded.get("ethercat_identification") in IDENTIFICATION_MODES:
+        st.session_state["ethercat_identification"] = loaded["ethercat_identification"]
     st.session_state["loaded_cpu_device_id"] = loaded.get("cpu_device_id", "")
     st.session_state["loaded_master_device_id"] = loaded.get("ethercat_master_device_id", "")
     st.session_state["configuration_load_message"] = True
@@ -586,6 +599,10 @@ master_label = st.selectbox(t("master"), master_labels, key="master_desc")
 master_selected = master_values[master_labels.index(master_label)] if master_values else {}
 
 project_path = st.text_input(t("path"), key="project_path")
+identification = st.selectbox(
+    t("ident"), list(IDENTIFICATION_MODES), key="ethercat_identification",
+    format_func=lambda mode: t("ident_" + mode), help=t("ident_help"),
+)
 
 st.session_state.setdefault("axis_count", len(st.session_state.axes))
 axis_count = st.number_input(t("axes_n"), 1, 32, step=1, key="axis_count")
@@ -707,6 +724,7 @@ configuration = {
     "ethercat_master_version": master_selected.get("version", ""),
     "ethercat_master_device_id": master_selected.get("device_id", ""),
     "project_path": project_path,
+    "ethercat_identification": identification,
     "axes": st.session_state.axes,
     "robot_groups": st.session_state.robot_groups,
 }

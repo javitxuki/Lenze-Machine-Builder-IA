@@ -32,12 +32,28 @@ de ingeniería (`Tools > Scripting > Execute Script File`).
   Cada parámetro se busca por su Id (`0x10000000 + subíndice`), que no depende del eje, y
   se **relee** después de escribirlo.
 
-Al acabar, el script imprime un resumen: `RESULT: OK` o la lista de avisos. Todavía **no**
-escribe en el proyecto el Station Alias ni el Second Alias de los drives, ni crea los
-Robot Groups: los valida y los lista en los avisos para configurarlos a mano.
+- Los **Robot Groups** bajo `Device > Kinematics`, con cada eje conectado a su rol
+  (parámetros *Connected drive A1..An* del grupo):
 
-Probado en PLC Designer 4.2 con un c520 1.15.0.4 y dos i950: 8/8 y 7/7 datos de máquina
-escritos, releídos y conservados al guardar y volver a abrir el proyecto.
+  | Tipo | Cinemática Lenze | Roles (A1..An) |
+  |---|---|---|
+  | CARTESIAN_2D | Portal_2dof (plano X-Z) | X, Z |
+  | CARTESIAN_3D | Portal_3dof | X, Y, Z |
+  | CARTESIAN_4D | Portal_4dof | X, Y, Z, C |
+  | SCARA | Scara_4dof | J1, J2, Z, R |
+  | DELTA | Delta3_3dof | ARM1, ARM2, ARM3 |
+
+- Opcionalmente, la **identificación EtherCAT** de cada drive en el maestro: Station
+  Alias (ADO 0x0012) o Explicit Device ID (ADO 0x0134), con el valor del campo Alias.
+  Por defecto está desactivada: con la comprobación activa, un drive que no lleve ese
+  valor grabado no arranca en el bus. El Second Alias no se escribe en el proyecto
+  (el maestro solo guarda una identificación por esclavo).
+
+Al acabar, el script imprime un resumen: `RESULT: OK` o la lista de avisos.
+
+Probado en PLC Designer 4.2 con un c520 1.15.0.4: datos de máquina de dos y tres i950
+(8/8 y 7/7, conservados al guardar y volver a abrir), un Portal_3dof con sus tres ejes
+conectados y la identificación por Station Alias en los tres drives: `RESULT: OK`.
 
 ## Local
 

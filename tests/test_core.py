@@ -142,5 +142,33 @@ class AuthTests(unittest.TestCase):
         self.assertTrue(problem)
 
 
+
+class GroupAndIdentificationTests(unittest.TestCase):
+
+    def test_group_order_and_2d_compatibility(self):
+        self.assertEqual(core.group_axis_order({"type": "CARTESIAN_3D", "axes": {"Z": "c", "X": "a", "Y": "b"}}),
+                         ["a", "b", "c"])
+        # un 2D guardado con X/Y: la Y va a A2 (la Z de Portal_2dof)
+        self.assertEqual(core.group_axis_order({"type": "CARTESIAN_2D", "axes": {"X": "a", "Y": "b"}}),
+                         ["a", "b"])
+
+    def test_script_groups_and_identification(self):
+        cfg = sample_config(ethercat_identification="STATION_ALIAS",
+                            robot_groups=[{"name": "Portal", "type": "CARTESIAN_2D",
+                                           "axes": {"X": "Table", "Z": "Axis_Y"}}])
+        tree = ast.parse(core.generate_plc_script(cfg))
+        values = {n.targets[0].id: ast.literal_eval(n.value) for n in tree.body
+                  if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name)
+                  and isinstance(n.value, (ast.Constant, ast.List, ast.Dict, ast.Tuple))}
+        self.assertEqual(values["IDENTIFICATION_MODE"], 1)
+        group = values["ROBOT_GROUPS"][0]
+        self.assertEqual(group["device"], [33121, "1028 0124", "4.2.0.0"])
+        self.assertEqual(group["order"], ["Table", "Axis_Y"])
+
+    def test_unsupported_group_type_is_an_error(self):
+        cfg = sample_config(robot_groups=[{"name": "G", "type": "GANTRY", "axes": {}}])
+        self.assertTrue(any("cinemática" in e for e in core.validate_config(cfg)))
+
+
 if __name__ == "__main__":
     unittest.main()

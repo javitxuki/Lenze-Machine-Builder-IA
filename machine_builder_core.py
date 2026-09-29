@@ -18,15 +18,48 @@ I950_VARIANTS = ["Normal", "DC-Link"]
 KINEMATICS = ["ROTARY", "LEADSCREW", "BELT", "RACK_PINION"]
 TRAVERSING = ["MODULO", "LIMITED"]
 
+# Grupos de robot: las cinemáticas Lenze que existen como dispositivo (tipo 33121)
+# bajo Device > Kinematics. Los roles van en el orden A1..An del grupo: cada uno es
+# el parámetro "Connected drive An" del grupo. Portal_2dof trabaja en el plano X-Z.
 ROBOT_TYPES = {
-    "CARTESIAN_2D": ["X", "Y"],
+    "CARTESIAN_2D": ["X", "Z"],
     "CARTESIAN_3D": ["X", "Y", "Z"],
-    "GANTRY": ["X1", "X2", "Y", "Z"],
+    "CARTESIAN_4D": ["X", "Y", "Z", "C"],
     "SCARA": ["J1", "J2", "Z", "R"],
     "DELTA": ["ARM1", "ARM2", "ARM3"],
-    "ARTICULATED_6_AXIS": ["J1", "J2", "J3", "J4", "J5", "J6"],
-    "CUSTOM": ["AXIS1", "AXIS2", "AXIS3", "AXIS4", "AXIS5", "AXIS6"],
 }
+
+ROBOT_DEVICES = {
+    "CARTESIAN_2D": (33121, "1028 0124", "4.2.0.0"),   # Portal_2dof
+    "CARTESIAN_3D": (33121, "1028 0102", "4.0.0.0"),   # Portal_3dof
+    "CARTESIAN_4D": (33121, "1028 0113", "4.0.0.0"),   # Portal_4dof
+    "SCARA": (33121, "1028 0105", "4.0.0.0"),          # Scara_4dof
+    "DELTA": (33121, "1028 0101", "4.0.0.0"),          # Delta3_3dof
+}
+
+# Tipos que tenían versiones anteriores de la herramienta y no tienen cinemática
+# Lenze equivalente: se avisa en vez de crear algo que no es.
+UNSUPPORTED_ROBOT_TYPES = ("GANTRY", "ARTICULATED_6_AXIS", "CUSTOM")
+
+# Identificación EtherCAT de los drives, en el maestro. Por defecto NINGUNA: con la
+# comprobación activa, un drive que no lleve ese alias grabado no arranca en el bus.
+IDENTIFICATION_MODES = {
+    "NONE": 0,                  # sin comprobación
+    "STATION_ALIAS": 1,         # Configured Station Alias (ADO 0x0012)
+    "EXPLICIT_DEVICE_ID": 2,    # Explicit Device Identification (ADO 0x0134)
+}
+
+
+def group_axis_order(group):
+    """Los nombres de eje del grupo en el orden A1..An de su cinemática.
+
+    Compatibilidad: un CARTESIAN_2D guardado con X/Y (versiones anteriores) usa la
+    Y como segundo eje, que en Portal_2dof es la Z."""
+    kind = group.get("type")
+    mapping = dict(group.get("axes") or {})
+    if kind == "CARTESIAN_2D" and "Z" not in mapping and "Y" in mapping:
+        mapping["Z"] = mapping["Y"]
+    return [mapping.get(role, "") for role in ROBOT_TYPES.get(kind, [])]
 
 
 @dataclass
@@ -286,13 +319,27 @@ def validate_config(cfg):
                     errors.append(f"{name}: el Cycle Length debe ser mayor que cero en un eje módulo.")
             except Exception:
                 errors.append(f"{name}: el Cycle Length no es un número.")
+    group_names = set()
     for group in cfg.get("robot_groups", []) or []:
-        used = list((group.get("axes") or {}).values())
+        label = str(group.get("name", "Grupo"))
+        if not IDENTIFIER.match(label):
+            errors.append(f"{label}: el nombre del grupo debe ser un identificador sin tildes ni espacios.")
+        if label.lower() in names or label.lower() in group_names:
+            errors.append(f"{label}: el nombre del grupo coincide con otro eje o grupo.")
+        group_names.add(label.lower())
+        if group.get("type") not in ROBOT_TYPES:
+            errors.append(f"{label}: el tipo {group.get('type')} no tiene cinemática Lenze equivalente.")
+            continue
+        used = [a for a in group_axis_order(group)]
+        if "" in used:
+            errors.append(f"{label}: falta asignar algún eje.")
         if len(used) != len(set(used)):
-            errors.append(f"{group.get('name', 'Grupo')}: hay ejes repetidos.")
+            errors.append(f"{label}: hay ejes repetidos.")
         for axis_name in used:
-            if axis_name.lower() not in names:
-                errors.append(f"{group.get('name', 'Grupo')}: el eje {axis_name} no existe o no está activo.")
+            if axis_name and axis_name.lower() not in names:
+                errors.append(f"{label}: el eje {axis_name} no existe o no está activo.")
+    if str(cfg.get("ethercat_identification", "NONE")) not in IDENTIFICATION_MODES:
+        errors.append("Modo de identificación EtherCAT no válido.")
     return errors
 
 
@@ -369,6 +416,9 @@ CPU_DEVICE_ID = __CPU_DEVICE_ID__
 ETHERCAT_MASTER_DEVICE_ID = __MASTER_DEVICE_ID__
 AXES = __AXES__
 ROBOT_GROUPS = __ROBOT_GROUPS__
+UNSUPPORTED_GROUPS = __UNSUPPORTED_GROUPS__
+# 0 none, 1 Configured Station Alias (ADO 0x0012), 2 Explicit Device ID (ADO 0x0134)
+IDENTIFICATION_MODE = __IDENTIFICATION_MODE__
 
 # Universal motion axis object (L_MC1P). Its machine data are found by parameter
 # Id = 0x10000000 + subindex, which does not depend on the axis.
@@ -377,6 +427,16 @@ AXIS_ID = "1028 0100"
 AXIS_VERSION_FALLBACK = "4.0.0.0"
 PARAMETER_BASE = 0x10000000
 PARAMETERS = __PARAMETERS__
+
+# Robot group: parameter "Connected drive An" = CONNECTED_DRIVE + (n - 1).
+CONNECTED_DRIVE = PARAMETER_BASE + 51
+
+# EtherCAT slave identification: host parameters of the slave connector. The
+# slave editor creates them the first time its page is opened, so the script
+# creates them if they are not there.
+ETC_STATION_ALIAS = 0x40110002
+ETC_IDENT_ADO = 0x40110005
+ETC_IDENT_MODE = 0x40110006
 
 # Axis connection parameters that link it to its EtherCAT drive.
 LINK_ECAT_REFERENCE = 20
@@ -469,6 +529,100 @@ def axis_of(project, controller, a, drive_name, automatic):
     if str(axis.get_name()) != a["name"]:
         axis.rename(a["name"])
     return axis
+
+
+def add_groups(controller, project):
+    """Adds the robot groups under Kinematics. Their cartesian axes come with them;
+    their parameters appear with the build, like the axis ones."""
+    created = []
+    if not ROBOT_GROUPS:
+        return created
+    kinematics = find_one(controller, "Kinematics")
+    if kinematics is None:
+        warn("The controller has no 'Kinematics' node: robot groups not created.")
+        return created
+    for g in ROBOT_GROUPS:
+        kind = g["device"]
+        kinematics.add(g["name"], kind[0], kind[1], kind[2])
+        group = find_one(project, g["name"])
+        if group is None:
+            warn("Robot group " + g["name"] + " was not created.")
+            continue
+        created.append((g, group))
+    return created
+
+
+def connect_groups(created):
+    """Writes each role's axis into the group's "Connected drive An" parameters."""
+    for g, group in created:
+        ok = 0
+        for n, axis_name in enumerate(g["order"]):
+            try:
+                parameter = group.device_parameters.by_id(CONNECTED_DRIVE + n)
+            except Exception:
+                parameter = None
+            if parameter is None:
+                warn(g["name"] + ": parameter 'Connected drive A%d' does not exist" % (n + 1))
+                continue
+            try:
+                parameter.value = axis_name
+                now = str(parameter.value).strip().strip("'")
+            except Exception as error:
+                warn(g["name"] + ": could not connect A%d = %s (%s)" % (n + 1, axis_name, error))
+                continue
+            if now == axis_name:
+                ok += 1
+            else:
+                warn(g["name"] + ": A%d was written as %s but reads %s" % (n + 1, axis_name, now))
+        DONE.append("%s (%s): %d/%d axes connected" % (g["name"], g["type"], ok, len(g["order"])))
+
+
+def object_manager():
+    import System
+    from System.Reflection import BindingFlags
+    flags = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic
+    for assembly in System.AppDomain.CurrentDomain.GetAssemblies():
+        if assembly.GetName().Name == "ScriptDriverDeviceObject.plugin":
+            env = assembly.GetType("_3S.CoDeSys.ScriptDriverDeviceObject.APEnvironment")
+            return env.GetProperty("ObjectMgr", flags).GetValue(None, None)
+    raise Exception("ObjectMgr not found")
+
+
+def set_identification(drive, mode, value):
+    """Sets the EtherCAT identification of a slave (what the slave editor writes),
+    on a writable copy of the device object that is then saved."""
+    import clr
+    clr.AddReference("DeviceObject")
+    from _3S.CoDeSys.DeviceObject import IParameterSet, IParameter4, IDataElement, AccessRight, ChannelType
+
+    def parameter(pset, pid, name, kind):
+        if not IParameterSet.Contains(pset, pid):
+            IParameterSet.AddParameter(pset, pid, name, AccessRight.ReadWrite, AccessRight.ReadWrite,
+                                       getattr(ChannelType, "None"), kind)
+        return IParameterSet.GetParameter(pset, pid)
+
+    def put(p, text, download):
+        try:
+            p.Value = text
+        except Exception:
+            IDataElement.Value.SetValue(p, text)
+        IParameter4.SetDownload(p, download)
+
+    manager = object_manager()
+    writable = manager.GetObjectToModify(drive.handle, drive.guid)
+    saved = False
+    try:
+        pset = writable.Object.Connectors[0].HostParameterSet
+        put(parameter(pset, ETC_IDENT_MODE, "DeviceIdenticationMode", "std:USINT"), str(mode), mode != 0)
+        put(parameter(pset, ETC_STATION_ALIAS, "StationAlias", "std:WORD"), str(value), mode != 0)
+        ado = {1: 0x12, 2: 0x134}.get(mode, 0)
+        put(parameter(pset, ETC_IDENT_ADO, "DeviceIdenticationADO", "std:UINT"), str(ado), False)
+        saved = True
+    finally:
+        manager.SetObject(writable, saved, None)
+    host = drive.connectors[0].host_parameters
+    return str(host.by_id(ETC_IDENT_MODE).value) == str(mode) and \
+        str(host.by_id(ETC_STATION_ALIAS).value) == str(value)
 
 
 def build(application):
@@ -611,8 +765,21 @@ def main():
         desc = exact_device(a["drive_type"], a["device_id"])
         master.add(drive_name, desc.device_id)
         axes.append((a, drive_name, axis_of(project, controller, a, drive_name, automatic)))
+        if IDENTIFICATION_MODE:
+            drive = find_one(project, drive_name)
+            try:
+                if set_identification(drive, IDENTIFICATION_MODE, a["station_alias"]):
+                    DONE.append("%s: EtherCAT identification %d = %d"
+                                % (drive_name, IDENTIFICATION_MODE, a["station_alias"]))
+                else:
+                    warn(drive_name + ": the EtherCAT identification did not read back as written")
+            except Exception as error:
+                warn(drive_name + ": could not set the EtherCAT identification (" + str(error) + ")")
+
+    groups = add_groups(controller, project)
 
     build(application)
+    connect_groups(groups)
 
     for a, drive_name, axis in axes:
         try:
@@ -630,12 +797,8 @@ def main():
         DONE.append("%s: drive %s, %d/%d machine data written"
                     % (a["name"], drive_name, ok, len(a["machine_data"])))
 
-    for a in AXES:
-        warn(a["name"] + ": EtherCAT station alias %d / second alias %d not written; "
-             "set them in the drive if needed" % (a["station_alias"], a["second_station_alias"]))
-    for g in ROBOT_GROUPS:
-        warn("Robot group " + g["name"] + " (" + g["type"] + ") not created; create it by hand with "
-             + ", ".join(role + "=" + axis for role, axis in sorted(g["axes"].items())))
+    for g in UNSUPPORTED_GROUPS:
+        warn("Robot group " + g + " not created: no Lenze kinematics for its type.")
 
     project.save()
     log("-" * 60)
@@ -672,9 +835,16 @@ def generate_plc_script(cfg):
             "second_station_alias": int(a["second_station_alias"]),
             "machine_data": axis_machine_data(a),
         })
-    groups = [{"name": str(g.get("name", "")), "type": str(g.get("type", "")),
-               "axes": {str(k): str(v) for k, v in (g.get("axes") or {}).items()}}
-              for g in cfg.get("robot_groups", []) or []]
+    groups = []
+    unsupported = []
+    for g in cfg.get("robot_groups", []) or []:
+        kind = str(g.get("type", ""))
+        if kind not in ROBOT_DEVICES:
+            unsupported.append("%s (%s)" % (g.get("name", ""), kind))
+            continue
+        groups.append({"name": str(g.get("name", "")), "type": kind,
+                       "device": list(ROBOT_DEVICES[kind]), "order": group_axis_order(g)})
+    mode = IDENTIFICATION_MODES.get(str(cfg.get("ethercat_identification", "NONE")), 0)
     script = SCRIPT_TEMPLATE
     for token, value in (
         ("__PROJECT_PATH__", str(cfg["project_path"]).strip()),
@@ -683,6 +853,8 @@ def generate_plc_script(cfg):
         ("__MASTER_DEVICE_ID__", cfg["ethercat_master_device_id"]),
         ("__AXES__", axes),
         ("__ROBOT_GROUPS__", groups),
+        ("__UNSUPPORTED_GROUPS__", unsupported),
+        ("__IDENTIFICATION_MODE__", mode),
         ("__PARAMETERS__", AXIS_PARAMETERS),
     ):
         script = script.replace(token, _ascii_literal(value))
