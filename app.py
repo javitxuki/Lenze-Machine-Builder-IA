@@ -9,7 +9,7 @@ from machine_builder_core import (
     AxisConfig, CPU_MODELS, DRIVES, I950_VARIANTS, IDENTIFICATION_MODES, KINEMATICS, ROBOT_TYPES, SAFETY,
     TRAVERSING, calculate_feed_constant, config_json, cpu_options, drive_options,
     format_decimal, generate_plc_script, load_repository, master_options,
-    normalize_axis, validate_config,
+    normalize_axis, normalize_number, validate_config,
 )
 from auth import (
     authenticate, change_password, init_auth_state, load_users, login_wait_seconds,
@@ -28,73 +28,67 @@ st.markdown(
 :root {
     --lenze-blue: #3155f5;
     --lenze-navy: #14213d;
-    --lenze-muted: #667085;
+    --lenze-muted: #5b6475;
     --lenze-border: #d8dee9;
-    --lenze-bg: #f4f6f9;
 }
 [data-testid="stHeader"], #MainMenu, footer { display: none; }
 .block-container {
-    padding-top: .5rem !important;
-    max-width: 99.5% !important;
-    padding-left: 0.7rem !important;
-    padding-right: 0.7rem !important;
+    padding-top: .6rem !important;
+    max-width: 1500px !important;
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
 }
-[data-testid="stAppViewContainer"] { background: var(--lenze-bg); }
+/* Cabecera */
 .lenze-head {
-    background: #fff;
+    background: #ffffff;
+    border: 1px solid var(--lenze-border);
     border-bottom: 3px solid var(--lenze-blue);
+    border-radius: 12px;
     padding: 12px 18px;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
     display: flex;
     align-items: center;
     gap: 18px;
-    width: 100%
 }
 .lenze-head img { width: 130px; max-height: 46px; object-fit: contain; }
-.lenze-title { border-left: 1px solid #d7dce5; padding-left: 18px; }
+.lenze-title { border-left: 1px solid var(--lenze-border); padding-left: 18px; }
 .lenze-title b { font-size: 20px; color: var(--lenze-navy); }
 .lenze-title span { display: block; color: var(--lenze-muted); font-size: 12px; }
-[data-testid="stExpander"] {
-    background: #fff;
+/* Metricas del resumen como tarjetas */
+[data-testid="stMetric"] {
+    background: #ffffff;
+    border: 1px solid var(--lenze-border);
+    border-radius: 12px;
+    padding: 10px 14px;
+}
+[data-testid="stMetricLabel"] p { color: var(--lenze-muted) !important; font-size: 12px; }
+[data-testid="stMetricValue"] { color: var(--lenze-navy) !important; font-size: 22px; }
+/* Pestanas */
+.stTabs [data-baseweb="tab-list"] { gap: 6px; border-bottom: 2px solid var(--lenze-border); }
+.stTabs [data-baseweb="tab"] {
+    background: #ffffff;
+    border: 1px solid var(--lenze-border);
+    border-bottom: none;
+    border-radius: 10px 10px 0 0;
+    padding: 8px 16px;
+    font-weight: 600;
+}
+.stTabs [aria-selected="true"] { color: var(--lenze-blue) !important; border-color: var(--lenze-blue); }
+/* Desplegables */
+[data-testid="stExpander"] details {
     border: 1px solid var(--lenze-border) !important;
     border-radius: 12px !important;
+    background: #ffffff;
 }
+[data-testid="stExpander"] summary p { font-weight: 600; color: var(--lenze-navy); }
 .stButton button, .stDownloadButton button { border-radius: 8px; font-weight: 600; }
 
-@media (max-width: 1200px) {
-    .block-container {
-        max-width: 100% !important;
-        padding-left: 0.5rem !important;
-        padding-right: 0.5rem !important;
-    }
-}
-
 @media (max-width: 768px) {
-    .block-container {
-        max-width: 100% !important;
-        padding-left: 0.35rem !important;
-        padding-right: 0.35rem !important;
-    }
-    .lenze-head {
-        flex-direction: column !important;
-        align-items: flex-start !important;
-        gap: 8px !important;
-        padding: 10px !important;
-    }
+    .block-container { padding-left: 0.4rem !important; padding-right: 0.4rem !important; }
+    .lenze-head { flex-direction: column !important; align-items: flex-start !important; gap: 8px !important; }
     .lenze-head img { width: 100px !important; max-height: 36px !important; }
     .lenze-title { border-left: none !important; padding-left: 0 !important; }
-    .lenze-title b { font-size: 18px !important; }
-    .lenze-title span { font-size: 11px !important; }
-    /* Las columnas de Streamlit se apilan en vertical */
-    [data-testid="column"] {
-        width: 100% !important;
-        min-width: 100% !important;
-        flex: 1 1 100% !important;
-        margin-bottom: 0.35rem !important;
-    }
-    [data-baseweb="input"], [data-baseweb="select"] { width: 100% !important; }
-    .stButton button, .stDownloadButton button { width: 100% !important; }
-    [data-testid="stExpander"] { overflow: visible !important; }
+    [data-testid="column"] { width: 100% !important; min-width: 100% !important; flex: 1 1 100% !important; }
 }
 </style>
 """,
@@ -183,6 +177,32 @@ TEXTS = {
         "openai_fallback": "No se pudo usar OpenAI ({0}); se ha usado el intérprete local.",
         "col_axis": "Eje",
         "col_param": "Parámetro",
+        'tab_ctrl': 'Controlador',
+        'path_help': 'Ruta en el PC de ingeniería donde PLC Designer creará el proyecto. Si ya existe, el script se para sin tocarlo.',
+        'name_help': 'Nombre del eje en el proyecto: letras sin tilde, números y _.',
+        'sec_mech': 'Mecánica',
+        'sec_gear': 'Reductora',
+        'sec_bus': 'EtherCAT y motor',
+        'trav_MODULO': 'Módulo (sin fin)',
+        'trav_LIMITED': 'Limitado',
+        'gear_den': 'Z1: denominador de la reductora',
+        'gear_num': 'Z2: numerador de la reductora',
+        'add_den': 'Z3: denominador de la reductora adicional',
+        'add_num': 'Z4: numerador de la reductora adicional',
+        'alias2_help': 'Se guarda en la configuración, pero no se escribe en el proyecto: el maestro EtherCAT solo guarda una identificación por drive.',
+        'groups_help': 'Cada grupo es una cinemática Lenze bajo Device > Kinematics. Asigna un eje a cada rol (A1..An).',
+        'robot_CARTESIAN_2D': 'Cartesiano 2D (plano X-Z) · Portal_2dof',
+        'robot_CARTESIAN_3D': 'Cartesiano 3D · Portal_3dof',
+        'robot_CARTESIAN_4D': 'Cartesiano 4D (X, Y, Z, C) · Portal_4dof',
+        'robot_SCARA': 'SCARA · Scara_4dof',
+        'robot_DELTA': 'Delta 3 brazos · Delta3_3dof',
+        'status': 'Estado',
+        'ready': 'Listo',
+        'n_errors': '{0} error(es)',
+        'fix_first': 'Corrige estos puntos antes de generar el script:',
+        'ready_long': 'Configuración válida: ya puedes descargar el script.',
+        'how_to_run': 'Ejecútalo en PLC Designer 4.2: Tools › Scripting › Execute Script File. Al terminar, el resumen dice RESULT: OK o lista los avisos.',
+        'preview_script': 'Ver el script generado',
     },
     "EN": {
         "title": "Lenze Machine Builder Web",
@@ -265,6 +285,32 @@ TEXTS = {
         "openai_fallback": "OpenAI could not be used ({0}); the local interpreter was used.",
         "col_axis": "Axis",
         "col_param": "Parameter",
+        'tab_ctrl': 'Controller',
+        'path_help': 'Path on the engineering PC where PLC Designer will create the project. If it exists, the script stops without touching it.',
+        'name_help': 'Axis name in the project: letters without accents, digits and _.',
+        'sec_mech': 'Mechanics',
+        'sec_gear': 'Gearbox',
+        'sec_bus': 'EtherCAT and motor',
+        'trav_MODULO': 'Modulo (endless)',
+        'trav_LIMITED': 'Limited',
+        'gear_den': 'Z1: gearbox denominator',
+        'gear_num': 'Z2: gearbox numerator',
+        'add_den': 'Z3: additional gearbox denominator',
+        'add_num': 'Z4: additional gearbox numerator',
+        'alias2_help': 'Kept in the configuration but not written to the project: the EtherCAT master stores one identification per drive.',
+        'groups_help': 'Each group is a Lenze kinematics under Device > Kinematics. Assign one axis per role (A1..An).',
+        'robot_CARTESIAN_2D': 'Cartesian 2D (X-Z plane) · Portal_2dof',
+        'robot_CARTESIAN_3D': 'Cartesian 3D · Portal_3dof',
+        'robot_CARTESIAN_4D': 'Cartesian 4D (X, Y, Z, C) · Portal_4dof',
+        'robot_SCARA': 'SCARA · Scara_4dof',
+        'robot_DELTA': 'Delta, 3 arms · Delta3_3dof',
+        'status': 'Status',
+        'ready': 'Ready',
+        'n_errors': '{0} error(s)',
+        'fix_first': 'Fix these points before generating the script:',
+        'ready_long': 'Valid configuration: the script can be downloaded.',
+        'how_to_run': 'Run it in PLC Designer 4.2: Tools › Scripting › Execute Script File. At the end, the summary says RESULT: OK or lists the warnings.',
+        'preview_script': 'Show the generated script',
     },
 }
 
@@ -581,139 +627,187 @@ def select_by_device_id(label_key, values, device_id_key):
                 st.session_state[label_key] = descriptor_label(item)
 
 
-cpu = st.selectbox(t("cpu"), CPU_MODELS, key="cpu_model")
-cpu_values = cpu_options(REPO, cpu)
-cpu_labels = [descriptor_label(item) for item in cpu_values] or [t("no_desc")]
-select_by_device_id("cpu_desc", cpu_values, "loaded_cpu_device_id")
-if st.session_state.get("cpu_desc") not in cpu_labels:
-    st.session_state["cpu_desc"] = cpu_labels[0]
-cpu_label = st.selectbox(t("cpu_desc"), cpu_labels, key="cpu_desc")
-cpu_selected = cpu_values[cpu_labels.index(cpu_label)] if cpu_values else {}
-
-master_values = master_options(REPO)
-master_labels = [descriptor_label(item) for item in master_values] or [t("no_desc")]
-select_by_device_id("master_desc", master_values, "loaded_master_device_id")
-if st.session_state.get("master_desc") not in master_labels:
-    st.session_state["master_desc"] = master_labels[0]
-master_label = st.selectbox(t("master"), master_labels, key="master_desc")
-master_selected = master_values[master_labels.index(master_label)] if master_values else {}
-
-project_path = st.text_input(t("path"), key="project_path")
-identification = st.selectbox(
-    t("ident"), list(IDENTIFICATION_MODES), key="ethercat_identification",
-    format_func=lambda mode: t("ident_" + mode), help=t("ident_help"),
-)
-
-st.session_state.setdefault("axis_count", len(st.session_state.axes))
-axis_count = st.number_input(t("axes_n"), 1, 32, step=1, key="axis_count")
-while len(st.session_state.axes) < axis_count:
-    index = len(st.session_state.axes)
-    st.session_state.axes.append(seed_axis_widgets(index, new_axis(index + 1)))
-st.session_state.axes = st.session_state.axes[:axis_count]
-
-st.subheader(t("axes"))
-
-
 def keep_valid(key, options):
     """Si el valor guardado ya no esta entre las opciones, se pasa a la primera."""
     if st.session_state.get(key) not in options:
         st.session_state[key] = options[0]
 
 
-for i, axis in enumerate(st.session_state.axes):
-    if f"name_{i}" not in st.session_state:
-        seed_axis_widgets(i, axis)
-    with st.expander(f"{i + 1}: {st.session_state[f'name_{i}']}", expanded=i == 0):
-        col1, col2, col3, col4 = st.columns(4)
-        axis["enabled"] = col1.checkbox(t("active"), key=f"en_{i}")
-        axis["name"] = col2.text_input(t("name"), key=f"name_{i}")
-        axis["drive_type"] = col3.selectbox(t("drive"), DRIVES, key=f"drv_{i}")
-        safety_options = SAFETY if axis["drive_type"] in ("i750", "i950") else ["Basic Safety"]
-        keep_valid(f"safe_{i}", safety_options)
-        axis["safety_variant"] = col4.selectbox(t("safety"), safety_options, key=f"safe_{i}")
+def normalize_decimal_field(key):
+    """Al salir de un campo decimal: coma o punto, y el numero bien escrito."""
+    value = st.session_state.get(key, "")
+    try:
+        st.session_state[key] = format_decimal(normalize_number(value))
+    except Exception:
+        pass
 
-        col1, col2, col3, col4 = st.columns(4)
-        if axis["drive_type"] == "i950":
-            keep_valid(f"i950_{i}", I950_VARIANTS)
-            axis["i950_variant"] = col1.selectbox(t("i950"), I950_VARIANTS, key=f"i950_{i}")
-        else:
-            axis["i950_variant"] = "Normal"
-            col1.empty()
 
-        descriptors = drive_options(REPO, axis["drive_type"], axis["safety_variant"], axis["i950_variant"])
-        labels = [descriptor_label(item) for item in descriptors] or [t("no_desc")]
-        keep_valid(f"desc_{i}", labels)
-        label = col2.selectbox(t("desc"), labels, key=f"desc_{i}")
-        selected = descriptors[labels.index(label)] if descriptors else {}
-        axis["descriptor_label"] = label
-        axis["device_id"] = selected.get("device_id", "")
-        axis["station_alias"] = col3.number_input("Alias", 0, 65535, key=f"alias_{i}")
-        axis["second_station_alias"] = col4.number_input(t("alias2"), 0, 65535, key=f"alias2_{i}")
+def axis_label(i):
+    name = st.session_state.get(f"name_{i}", "")
+    kin = st.session_state.get(f"kin_{i}", "")
+    drive = st.session_state.get(f"drv_{i}", "")
+    return f"{i + 1} · {name} — {drive} · {kin}"
 
-        col1, col2, col3, col4 = st.columns(4)
-        axis["motor_code_c86"] = col1.text_input("C86", key=f"c86_{i}")
-        axis["kinematics"] = col2.selectbox(t("kinematics"), KINEMATICS, key=f"kin_{i}")
-        axis["kinematic_parameter"] = col3.text_input(t("kin_param"), key=f"kp_{i}", help=t("kin_help"))
-        axis["traversing_range"] = col4.selectbox(t("traversing"), TRAVERSING, key=f"trav_{i}")
 
-        for column, z_name in zip(st.columns(4), ("z1", "z2", "z3", "z4")):
-            axis[z_name] = column.number_input(z_name.upper(), 1, 1000000, step=1, key=f"{z_name}_{i}")
+# La barra de resumen va arriba, pero se rellena al final, cuando ya se sabe si la
+# configuracion es valida.
+summary = st.container()
 
-        col1, col2, col3 = st.columns(3)
-        axis["feed_constant"] = col1.text_input(t("feed"), key=f"feed_{i}", help=t("feed_help"))
-        if axis["traversing_range"] == "MODULO":
-            axis["cycle_length"] = col2.text_input(t("cycle"), key=f"cycle_{i}")
-        else:
-            axis["cycle_length"] = st.session_state.get(f"cycle_{i}", "0")
-            col2.empty()
-        col3.button(
-            "🧮 " + t("calc"), key=f"calculate_feed_{i}", width="stretch",
-            type="primary", on_click=request_feed_update, args=(i,),
-        )
+tab_ctrl, tab_axes, tab_groups, tab_gen = st.tabs(
+    ["⚙️ " + t("tab_ctrl"), "🔧 " + t("axes"), "🤖 " + t("groups"), "💾 " + t("gen")]
+)
 
-if st.session_state.get("feed_error"):
-    st.error(st.session_state.pop("feed_error"))
+# ------------------------------------------------------------ controlador
+with tab_ctrl:
+    col1, col2 = st.columns(2)
+    cpu = col1.selectbox(t("cpu"), CPU_MODELS, key="cpu_model")
+    cpu_values = cpu_options(REPO, cpu)
+    cpu_labels = [descriptor_label(item) for item in cpu_values] or [t("no_desc")]
+    select_by_device_id("cpu_desc", cpu_values, "loaded_cpu_device_id")
+    keep_valid("cpu_desc", cpu_labels)
+    cpu_label = col2.selectbox(t("cpu_desc"), cpu_labels, key="cpu_desc")
+    cpu_selected = cpu_values[cpu_labels.index(cpu_label)] if cpu_values else {}
 
-st.markdown("---")
-st.subheader("🤖 " + t("groups"))
+    col1, col2 = st.columns(2)
+    master_values = master_options(REPO)
+    master_labels = [descriptor_label(item) for item in master_values] or [t("no_desc")]
+    select_by_device_id("master_desc", master_values, "loaded_master_device_id")
+    keep_valid("master_desc", master_labels)
+    master_label = col1.selectbox(t("master"), master_labels, key="master_desc")
+    master_selected = master_values[master_labels.index(master_label)] if master_values else {}
+    identification = col2.selectbox(
+        t("ident"), list(IDENTIFICATION_MODES), key="ethercat_identification",
+        format_func=lambda mode: t("ident_" + mode), help=t("ident_help"),
+    )
+    if identification != "NONE":
+        st.warning(t("ident_help"))
 
-st.session_state.setdefault("robot_group_count", len(st.session_state.robot_groups))
-group_count = st.number_input(t("groups_n"), min_value=0, max_value=16, step=1, key="robot_group_count")
-while len(st.session_state.robot_groups) < group_count:
-    st.session_state.robot_groups.append({
-        "name": f"RobotGroup_{len(st.session_state.robot_groups) + 1:02}",
-        "type": "CARTESIAN_3D",
-        "axes": {},
-    })
-st.session_state.robot_groups = st.session_state.robot_groups[:group_count]
+    project_path = st.text_input(t("path"), key="project_path", help=t("path_help"))
 
-axis_names = [a["name"] for a in st.session_state.axes if a.get("enabled", True)]
+# ------------------------------------------------------------ ejes
+with tab_axes:
+    st.session_state.setdefault("axis_count", len(st.session_state.axes))
+    axis_count = st.number_input(t("axes_n"), 1, 32, step=1, key="axis_count")
+    while len(st.session_state.axes) < axis_count:
+        index = len(st.session_state.axes)
+        st.session_state.axes.append(seed_axis_widgets(index, new_axis(index + 1)))
+    st.session_state.axes = st.session_state.axes[:axis_count]
 
-for group_index, group in enumerate(st.session_state.robot_groups):
-    with st.expander(f"{t('group')} {group_index + 1}", expanded=(group_index == 0)):
-        col1, col2 = st.columns(2)
-        name_key = f"group_name_{group_index}"
-        st.session_state.setdefault(name_key, group.get("name", f"RobotGroup_{group_index + 1:02}"))
-        group["name"] = col1.text_input(t("group_name"), key=name_key)
-        robot_types = list(ROBOT_TYPES.keys())
-        type_key = f"group_type_{group_index}"
-        st.session_state.setdefault(type_key, group.get("type", "CARTESIAN_3D"))
-        keep_valid(type_key, robot_types)
-        group["type"] = col2.selectbox(t("group_type"), robot_types, key=type_key)
+    overview = st.container()
 
-        roles = ROBOT_TYPES[group["type"]]
-        mapping = {}
-        if axis_names:
-            columns = st.columns(min(len(roles), 4))
-            for role_index, role in enumerate(roles):
-                role_key = f"group_{group_index}_{role}"
-                st.session_state.setdefault(role_key, group.get("axes", {}).get(role, axis_names[0]))
-                keep_valid(role_key, axis_names)
-                mapping[role] = columns[role_index % len(columns)].selectbox(role, axis_names, key=role_key)
-        group["axes"] = mapping
-        if len(mapping.values()) != len(set(mapping.values())):
-            st.error(t("group_dup"))
+    for i, axis in enumerate(st.session_state.axes):
+        if f"name_{i}" not in st.session_state:
+            seed_axis_widgets(i, axis)
+        box = st.expander(axis_label(i), expanded=(i == 0))
+        with box:
+            col1, col2, col3, col4 = st.columns(4)
+            axis["enabled"] = col1.checkbox(t("active"), key=f"en_{i}")
+            axis["name"] = col2.text_input(t("name"), key=f"name_{i}", help=t("name_help"))
+            axis["drive_type"] = col3.selectbox(t("drive"), DRIVES, key=f"drv_{i}")
+            safety_options = SAFETY if axis["drive_type"] in ("i750", "i950") else ["Basic Safety"]
+            keep_valid(f"safe_{i}", safety_options)
+            axis["safety_variant"] = col4.selectbox(t("safety"), safety_options, key=f"safe_{i}")
 
+            col1, col2 = st.columns([1, 3])
+            if axis["drive_type"] == "i950":
+                keep_valid(f"i950_{i}", I950_VARIANTS)
+                axis["i950_variant"] = col1.selectbox(t("i950"), I950_VARIANTS, key=f"i950_{i}")
+            else:
+                axis["i950_variant"] = "Normal"
+                col1.text_input(t("i950"), "—", disabled=True, key=f"i950_off_{i}")
+            descriptors = drive_options(REPO, axis["drive_type"], axis["safety_variant"], axis["i950_variant"])
+            labels = [descriptor_label(item) for item in descriptors] or [t("no_desc")]
+            keep_valid(f"desc_{i}", labels)
+            label = col2.selectbox(t("desc"), labels, key=f"desc_{i}")
+            selected = descriptors[labels.index(label)] if descriptors else {}
+            axis["descriptor_label"] = label
+            axis["device_id"] = selected.get("device_id", "")
+
+            st.markdown(f"**{t('sec_mech')}**")
+            col1, col2, col3 = st.columns(3)
+            axis["kinematics"] = col1.selectbox(t("kinematics"), KINEMATICS, key=f"kin_{i}")
+            axis["kinematic_parameter"] = col2.text_input(
+                t("kin_param"), key=f"kp_{i}", help=t("kin_help"),
+                on_change=normalize_decimal_field, args=(f"kp_{i}",))
+            axis["traversing_range"] = col3.selectbox(
+                t("traversing"), TRAVERSING, key=f"trav_{i}",
+                format_func=lambda v: t("trav_" + v))
+
+            col1, col2, col3 = st.columns(3, vertical_alignment="bottom")
+            axis["feed_constant"] = col1.text_input(
+                t("feed"), key=f"feed_{i}", help=t("feed_help"),
+                on_change=normalize_decimal_field, args=(f"feed_{i}",))
+            col2.button("🧮 " + t("calc"), key=f"calculate_feed_{i}", width="stretch",
+                        on_click=request_feed_update, args=(i,))
+            if axis["traversing_range"] == "MODULO":
+                axis["cycle_length"] = col3.text_input(
+                    t("cycle"), key=f"cycle_{i}", on_change=normalize_decimal_field, args=(f"cycle_{i}",))
+            else:
+                axis["cycle_length"] = st.session_state.get(f"cycle_{i}", "0")
+                col3.text_input(t("cycle"), "—", disabled=True, key=f"cycle_off_{i}")
+
+            st.markdown(f"**{t('sec_gear')}**")
+            gear = st.columns(4)
+            for column, z_name, hint in zip(gear, ("z1", "z2", "z3", "z4"),
+                                            ("gear_den", "gear_num", "add_den", "add_num")):
+                axis[z_name] = column.number_input(z_name.upper(), 1, 1000000, step=1,
+                                                   key=f"{z_name}_{i}", help=t(hint))
+
+            st.markdown(f"**{t('sec_bus')}**")
+            col1, col2, col3 = st.columns(3)
+            axis["station_alias"] = col1.number_input("Alias", 0, 65535, key=f"alias_{i}")
+            axis["second_station_alias"] = col2.number_input(t("alias2"), 0, 65535, key=f"alias2_{i}",
+                                                             help=t("alias2_help"))
+            axis["motor_code_c86"] = col3.text_input("C86", key=f"c86_{i}")
+            errors_here = st.container()
+            axis["_errors_box"] = errors_here
+
+    if st.session_state.get("feed_error"):
+        st.error(st.session_state.pop("feed_error"))
+
+# ------------------------------------------------------------ grupos
+with tab_groups:
+    st.caption(t("groups_help"))
+    st.session_state.setdefault("robot_group_count", len(st.session_state.robot_groups))
+    group_count = st.number_input(t("groups_n"), min_value=0, max_value=16, step=1, key="robot_group_count")
+    while len(st.session_state.robot_groups) < group_count:
+        st.session_state.robot_groups.append({
+            "name": f"RobotGroup_{len(st.session_state.robot_groups) + 1:02}",
+            "type": "CARTESIAN_3D",
+            "axes": {},
+        })
+    st.session_state.robot_groups = st.session_state.robot_groups[:group_count]
+
+    axis_names = [a["name"] for a in st.session_state.axes if a.get("enabled", True)]
+    robot_types = list(ROBOT_TYPES.keys())
+
+    for group_index, group in enumerate(st.session_state.robot_groups):
+        with st.expander(f"{group_index + 1} · {group.get('name', '')}", expanded=(group_index == 0)):
+            col1, col2 = st.columns(2)
+            name_key = f"group_name_{group_index}"
+            st.session_state.setdefault(name_key, group.get("name", f"RobotGroup_{group_index + 1:02}"))
+            group["name"] = col1.text_input(t("group_name"), key=name_key)
+            type_key = f"group_type_{group_index}"
+            st.session_state.setdefault(type_key, group.get("type", "CARTESIAN_3D"))
+            keep_valid(type_key, robot_types)
+            group["type"] = col2.selectbox(t("group_type"), robot_types, key=type_key,
+                                           format_func=lambda k: t("robot_" + k))
+            roles = ROBOT_TYPES[group["type"]]
+            mapping = {}
+            if axis_names:
+                columns = st.columns(len(roles))
+                for role_index, role in enumerate(roles):
+                    role_key = f"group_{group_index}_{role}"
+                    st.session_state.setdefault(role_key, group.get("axes", {}).get(role, axis_names[0]))
+                    keep_valid(role_key, axis_names)
+                    mapping[role] = columns[role_index].selectbox(
+                        f"A{role_index + 1} · {role}", axis_names, key=role_key)
+            group["axes"] = mapping
+            if len(mapping.values()) != len(set(mapping.values())):
+                st.error(t("group_dup"))
+
+# ------------------------------------------------------------ configuracion y validacion
+axes_clean = [{k: v for k, v in a.items() if not k.startswith("_")} for a in st.session_state.axes]
 configuration = {
     "format": "LenzeMachineBuilderWeb",
     "format_version": 3,
@@ -725,47 +819,83 @@ configuration = {
     "ethercat_master_device_id": master_selected.get("device_id", ""),
     "project_path": project_path,
     "ethercat_identification": identification,
-    "axes": st.session_state.axes,
+    "axes": axes_clean,
     "robot_groups": st.session_state.robot_groups,
 }
 
 validation_errors = validate_config(configuration)
-generated_script = None
-if validation_errors:
-    for validation_error in validation_errors:
-        st.error(validation_error)
-else:
-    generated_script = generate_plc_script(configuration)
+generated_script = None if validation_errors else generate_plc_script(configuration)
 
-st.markdown("---")
-st.subheader("💾 " + t("gen"))
+# Los errores de cada eje, dentro de su desplegable.
+for axis in st.session_state.axes:
+    box = axis.pop("_errors_box", None)
+    mine = [e for e in validation_errors if e.startswith(str(axis.get("name")) + ":")]
+    if box is not None:
+        for error in mine:
+            box.error(error)
 
-load_col, save_col, script_col = st.columns(3)
+with overview:
+    rows = []
+    for a in axes_clean:
+        bad = any(e.startswith(str(a.get("name")) + ":") for e in validation_errors)
+        rows.append({
+            "": "⚠️" if bad else ("✅" if a.get("enabled") else "⏸️"),
+            t("name"): a.get("name"),
+            t("drive"): a.get("drive_type"),
+            t("kinematics"): a.get("kinematics"),
+            t("traversing"): t("trav_" + str(a.get("traversing_range"))),
+            t("feed"): format_decimal(a.get("feed_constant")),
+            "Z1:Z2": f"{a.get('z1')}:{a.get('z2')}",
+            "Z3:Z4": f"{a.get('z3')}:{a.get('z4')}",
+            "Alias": str(a.get("station_alias")),
+        })
+    st.dataframe(rows, width="stretch", hide_index=True)
 
-with load_col:
-    uploaded_configuration = st.file_uploader(t("load"), type=["json"], key="bottom_configuration_uploader")
-    if st.button(t("apply"), key="bottom_apply_configuration", width="stretch",
-                 disabled=uploaded_configuration is None):
-        try:
-            loaded_configuration = json.load(uploaded_configuration)
-            if not isinstance(loaded_configuration, dict):
-                raise ValueError("JSON")
-            st.session_state["pending_loaded_configuration"] = loaded_configuration
-            st.rerun()
-        except Exception as error:
-            st.error(t("load_error") + str(error))
+with summary:
+    active = sum(1 for a in axes_clean if a.get("enabled"))
+    cols = st.columns(5)
+    cols[0].metric(f'{t("cpu")} · {cpu_selected.get("version", "—")}', cpu)
+    cols[1].metric("EtherCAT", master_selected.get("version", "—"))
+    cols[2].metric(t("axes"), f"{active} / {len(axes_clean)}")
+    cols[3].metric(t("groups"), str(len(st.session_state.robot_groups)))
+    cols[4].metric(t("status"), "✅ " + t("ready") if not validation_errors
+                   else "⚠️ " + t("n_errors").format(len(validation_errors)))
 
-with save_col:
-    st.write("")
-    st.write("")
-    st.download_button(t("save_json"), config_json(configuration), "machine_configuration.json",
-                       "application/json", width="stretch")
-
-with script_col:
-    st.write("")
-    st.write("")
-    if generated_script is not None:
-        st.download_button(t("download"), generated_script, "Create_PLCDesigner_Project_Generated.py",
-                           "text/x-python", width="stretch")
+# ------------------------------------------------------------ generar
+with tab_gen:
+    if validation_errors:
+        st.error(t("fix_first"))
+        for validation_error in validation_errors:
+            st.markdown("- " + validation_error)
     else:
-        st.button(t("download"), width="stretch", disabled=True, help=t("download_help"))
+        st.success(t("ready_long"))
+
+    load_col, save_col, script_col = st.columns(3, vertical_alignment="bottom")
+    with load_col:
+        uploaded_configuration = st.file_uploader(t("load"), type=["json"], key="bottom_configuration_uploader")
+        if st.button(t("apply"), key="bottom_apply_configuration", width="stretch",
+                     disabled=uploaded_configuration is None):
+            try:
+                loaded_configuration = json.load(uploaded_configuration)
+                if not isinstance(loaded_configuration, dict):
+                    raise ValueError("JSON")
+                st.session_state["pending_loaded_configuration"] = loaded_configuration
+                st.rerun()
+            except Exception as error:
+                st.error(t("load_error") + str(error))
+
+    project_stem = Path(str(project_path).replace("\\", "/")).stem or "machine"
+    with save_col:
+        st.download_button("💾 " + t("save_json"), config_json(configuration),
+                           f"{project_stem}_configuration.json", "application/json", width="stretch")
+    with script_col:
+        if generated_script is not None:
+            st.download_button("⬇️ " + t("download"), generated_script, f"Create_{project_stem}.py",
+                               "text/x-python", width="stretch", type="primary")
+        else:
+            st.button("⬇️ " + t("download"), width="stretch", disabled=True, help=t("download_help"))
+
+    if generated_script is not None:
+        st.caption(t("how_to_run"))
+        with st.expander(t("preview_script")):
+            st.code(generated_script, language="python")

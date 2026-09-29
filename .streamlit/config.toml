@@ -1,0 +1,16 @@
+# Tema fijo: la app usa los colores de Lenze sobre fondo claro. Sin esto, con el
+# navegador o Streamlit en modo oscuro, el texto sale blanco sobre las tarjetas
+# claras.
+[theme]
+base = "light"
+primaryColor = "#3155f5"
+backgroundColor = "#f4f6f9"
+secondaryBackgroundColor = "#ffffff"
+textColor = "#14213d"
+font = "sans serif"
+
+[client]
+toolbarMode = "minimal"
+
+[browser]
+gatherUsageStats = false
