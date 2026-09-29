@@ -72,8 +72,8 @@ def verify_password(password, stored):
 # ------------------------------------------------------------------ usuarios
 
 def load_users():
-    import os
-    print("DEBUG MB_USERS_JSON =", os.getenv("MB_USERS_JSON"))
+    """import os
+    print("DEBUG MB_USERS_JSON =", os.getenv("MB_USERS_JSON"))"""
     """Devuelve (usuarios, problema). Sin MB_USERS_JSON no hay usuarios."""
     raw = os.getenv("MB_USERS_JSON", "").strip()
     if not raw:
