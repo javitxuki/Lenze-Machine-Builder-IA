@@ -1,14 +1,33 @@
+# -*- coding: utf-8 -*-
+"""Lógica de Machine Builder: catálogo, validación y generación del script.
+
+No depende de Streamlit, así que se puede probar sola (tests/test_core.py).
+"""
 from __future__ import annotations
-import json, re
-from dataclasses import dataclass, asdict
+
+import json
+import math
+import re
+from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 CPU_MODELS = ["c430", "c520", "c550"]
 DRIVES = ["i550", "i750", "i950"]
 SAFETY = ["Basic Safety", "Extended Safety"]
+I950_VARIANTS = ["Normal", "DC-Link"]
 KINEMATICS = ["ROTARY", "LEADSCREW", "BELT", "RACK_PINION"]
 TRAVERSING = ["MODULO", "LIMITED"]
+
+ROBOT_TYPES = {
+    "CARTESIAN_2D": ["X", "Y"],
+    "CARTESIAN_3D": ["X", "Y", "Z"],
+    "GANTRY": ["X1", "X2", "Y", "Z"],
+    "SCARA": ["J1", "J2", "Z", "R"],
+    "DELTA": ["ARM1", "ARM2", "ARM3"],
+    "ARTICULATED_6_AXIS": ["J1", "J2", "J3", "J4", "J5", "J6"],
+    "CUSTOM": ["AXIS1", "AXIS2", "AXIS3", "AXIS4", "AXIS5", "AXIS6"],
+}
+
 
 @dataclass
 class AxisConfig:
@@ -33,277 +52,584 @@ class AxisConfig:
     cycle_length: float = 360.0
 
 
+# ============================================================ números y nombres
+
+def normalize_number(value):
+    return float(str(value).strip().replace(" ", "").replace(",", "."))
+
+
+def format_decimal(value):
+    """Un número como texto, sin ceros de sobra y siempre con parte decimal."""
+    try:
+        number = normalize_number(value)
+    except Exception:
+        return str(value)
+    text = ("%.12f" % number).rstrip("0").rstrip(".")
+    return text if "." in text else text + ".0"
+
+
+# Nombre IEC válido y ASCII: el objeto de eje y el drive se llaman así en el
+# proyecto, y el script lo ejecuta IronPython 2.7.
+IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,50}$")
+
+
+def calculate_feed_constant(kinematics, kinematic_parameter):
+    """Avance por vuelta de la SALIDA de la reductora (unidad de posición / vuelta).
+
+    ROTARY: 360 (grados). LEADSCREW: el paso del husillo. BELT y RACK_PINION: pi por
+    el diámetro efectivo. La relación de la reductora (Z1..Z4) NO entra aquí: va en
+    sus propios parámetros del eje."""
+    value = normalize_number(kinematic_parameter)
+    if value <= 0:
+        raise ValueError("El parámetro cinemático debe ser mayor que cero.")
+    mode = str(kinematics).upper()
+    if mode == "ROTARY":
+        return 360.0
+    if mode == "LEADSCREW":
+        return value
+    if mode in ("BELT", "RACK_PINION"):
+        return math.pi * value
+    raise ValueError("Cinemática no reconocida: " + mode)
+
+
+# ============================================================ normalización
+
+def normalize_safety(value, drive_type=None):
+    text = str(value or "").lower()
+    if drive_type == "i550":
+        return "Basic Safety"
+    if "extended" in text or "advanced" in text:
+        return "Extended Safety"
+    return "Basic Safety"
+
+
+def normalize_i950_variant(value, drive_type=None):
+    if drive_type not in (None, "i950"):
+        return "Normal"
+    text = str(value or "").lower().replace(" ", "").replace("-", "")
+    return "DC-Link" if "dclink" in text else "Normal"
+
+
+def normalize_traversing_range(value):
+    text = str(value or "").upper()
+    if text in ("LIMITED", "LINEAR", "LIMITADO"):
+        return "LIMITED"
+    return "MODULO"
+
+
+def normalize_axis(axis, index=1):
+    """Un eje con todos sus campos y con valores que la aplicación admite."""
+    base = asdict(AxisConfig(name=f"Axis_{index:02d}", station_alias=1000 + index,
+                             second_station_alias=2000 + index))
+    if isinstance(axis, dict):
+        for key in base:
+            if key in axis and axis[key] is not None:
+                base[key] = axis[key]
+    base["enabled"] = bool(base["enabled"])
+    base["name"] = str(base["name"]).strip() or f"Axis_{index:02d}"
+    if base["drive_type"] not in DRIVES:
+        base["drive_type"] = "i950"
+    base["safety_variant"] = normalize_safety(base["safety_variant"], base["drive_type"])
+    base["i950_variant"] = normalize_i950_variant(base["i950_variant"], base["drive_type"])
+    base["kinematics"] = str(base["kinematics"]).upper()
+    if base["kinematics"] not in KINEMATICS:
+        base["kinematics"] = "ROTARY"
+    base["traversing_range"] = normalize_traversing_range(base["traversing_range"])
+    for key in ("station_alias", "second_station_alias"):
+        try:
+            base[key] = int(float(base[key]))
+        except Exception:
+            base[key] = 0
+    for key in ("z1", "z2", "z3", "z4"):
+        try:
+            base[key] = max(1, int(round(float(base[key]))))
+        except Exception:
+            base[key] = 1
+    for key in ("kinematic_parameter", "feed_constant", "cycle_length"):
+        try:
+            base[key] = normalize_number(base[key])
+        except Exception:
+            pass
+    base["motor_code_c86"] = str(base["motor_code_c86"] or "")
+    return base
+
+
+# ============================================================ catálogo
+
 def version_key(value: str):
-    nums=[]
-    for x in re.split(r"[^0-9]+", str(value)):
-        if x: nums.append(int(x))
+    nums = [int(x) for x in re.split(r"[^0-9]+", str(value)) if x]
     return tuple(nums or [0])
 
 
 def load_repository(path: str | Path = "device_repository.json") -> dict:
-    p=Path(path)
-    if not p.exists(): return {"devices": []}
+    p = Path(path)
+    if not p.exists():
+        return {"devices": []}
     return json.loads(p.read_text(encoding="utf-8"))
 
 
-def _devices(repo): return repo.get("devices", []) if isinstance(repo, dict) else []
+def _devices(repo):
+    return repo.get("devices", []) if isinstance(repo, dict) else []
+
+
+def _device_id(d):
+    return str(d.get("device_id", d.get("type", "")))
 
 
 def cpu_options(repo, model):
-    exact=f"Controller {model}".lower()
-    values=[d for d in _devices(repo) if str(d.get("name","")).lower()==exact]
-    return sorted(values,key=lambda d:version_key(d.get("version","")), reverse=True)
+    exact = f"Controller {model}".lower()
+    values = [{**d, "device_id": _device_id(d)} for d in _devices(repo)
+              if str(d.get("name", "")).lower() == exact]
+    return sorted(values, key=lambda d: version_key(d.get("version", "")), reverse=True)
 
+
+# Versiones del EtherCAT Master que se ofrecen. Las 4.x existen en el catálogo pero
+# quedan fuera hasta confirmar que el resto del proyecto las admite.
 VALID_ETHERCAT_MASTER_VERSIONS = {
-    "3.0.0.10",
-    "3.1.0.0",
-    "3.2.0.0",
-    "3.3.0.0",
-    "3.4.0.0",
-    "3.6.0.0",
-    "3.9.0.0",
-    "3.10.0.1",
-    "3.12.0.1",
-    "3.14.0.0",
-    "3.14.0.1",
-    "3.15.0.0",
-    "3.15.0.1",
-    "3.16.0.0",
-    "3.17.0.0",
-    "3.18.0.0",
-    "3.18.1.0",
-    "3.18.2.0",
-    "3.18.3.0",
-    "3.18.4.0",
-    "3.28.0.0",
+    "3.0.0.10", "3.1.0.0", "3.2.0.0", "3.3.0.0", "3.4.0.0", "3.6.0.0", "3.9.0.0",
+    "3.10.0.1", "3.12.0.1", "3.14.0.0", "3.14.0.1", "3.15.0.0", "3.15.0.1", "3.16.0.0",
+    "3.17.0.0", "3.18.0.0", "3.18.1.0", "3.18.2.0", "3.18.3.0", "3.18.4.0", "3.28.0.0",
     "3.32.0.1",
 }
 
+
 def master_options(repo):
-
-    vals = []
-
+    values = []
     for d in _devices(repo):
-
-        name = str(
-            d.get("name", "")
-        )
-
-        version = str(
-            d.get("version", "")
-        )
-
-        did = str(
-            d.get(
-                "device_id",
-                d.get("type", "")
-            )
-        )
-
-        if "ethercat master" not in name.lower():
+        name = str(d.get("name", "")).lower()
+        if "ethercat master" not in name or "slave" in name:
             continue
-
-        if "slave" in name.lower():
+        if str(d.get("version", "")) not in VALID_ETHERCAT_MASTER_VERSIONS:
             continue
+        values.append({**d, "device_id": _device_id(d)})
+    return sorted(values, key=lambda d: version_key(d.get("version", "")), reverse=True)
 
-        if version not in VALID_ETHERCAT_MASTER_VERSIONS:
-            continue
 
-        vals.append({
-            **d,
-            "device_id": did
-        })
-
-    return sorted(
-        vals,
-        key=lambda d:
-            version_key(
-                d.get("version", "")
-            ),
-        reverse=True
-    )
+def _is_extended_safety(low_name):
+    # "(ES)" o "Extended Safety". "(AS)" es Advanced/Basic en i750 y "Extended for
+    # customer specific devices" no es una variante de safety.
+    if "customer specific" in low_name:
+        return False
+    return "extended" in low_name or "(es" in low_name
 
 
 def drive_options(repo, drive, safety="Basic Safety", i950_variant="Normal"):
-    out=[]
+    out = []
     for d in _devices(repo):
-        name=str(d.get("name", "")); low=name.lower(); did=str(d.get("device_id",d.get("type","")))
-        if drive.lower() not in low: continue
-        if not did.startswith("DeviceID(type=65,"): continue
-        if drive in ("i750","i950"):
-            ext=("extended" in low or "(es" in low)
-            if safety=="Extended Safety" and not ext: continue
-            if safety=="Basic Safety" and ext: continue
-        if drive=="i950":
-            dc=("dc-link" in low or "dc link" in low or "dclink" in low)
-            if i950_variant=="DC-Link" and not dc: continue
-            if i950_variant!="DC-Link" and dc: continue
-        out.append({**d,"device_id":did})
-    return sorted(out,key=lambda d:version_key(d.get("version","")), reverse=True)
+        name = str(d.get("name", ""))
+        low = name.lower()
+        did = _device_id(d)
+        if drive.lower() not in low:
+            continue
+        if not did.startswith("DeviceID(type=65,"):
+            continue
+        if drive in ("i750", "i950"):
+            ext = _is_extended_safety(low)
+            if safety == "Extended Safety" and not ext:
+                continue
+            if safety == "Basic Safety" and ext:
+                continue
+        if drive == "i950":
+            dc = "dc-link" in low or "dc link" in low or "dclink" in low
+            if i950_variant == "DC-Link" and not dc:
+                continue
+            if i950_variant != "DC-Link" and dc:
+                continue
+        out.append({**d, "device_id": did})
+    return sorted(out, key=lambda d: version_key(d.get("version", "")), reverse=True)
 
 
-def normalize_number(value):
-    return float(str(value).strip().replace(" ","").replace(",","."))
-
-
-def lreal(value):
-    n=normalize_number(value); s=f"{n:.12f}".rstrip("0").rstrip(".")
-    return s if "." in s else s+".0"
-
+# ============================================================ validación
 
 def validate_config(cfg):
-    errors=[]; names=set(); aliases=set(); aliases2=set()
-    axes=[a for a in cfg.get("axes",[]) if a.get("enabled",True)]
-    if not axes: errors.append("Debe existir al menos un eje activo.")
-    for i,a in enumerate(axes,1):
-        name=str(a.get("name","")).strip()
-        if not name: errors.append(f"Eje {i}: nombre vacío.")
-        if name in names: errors.append(f"Nombre duplicado: {name}.")
-        names.add(name)
-        for key,seen,label in [("station_alias",aliases,"Alias"),("second_station_alias",aliases2,"Second Alias")]:
-            v=int(a.get(key,0))
-            if v in seen: errors.append(f"{label} duplicado: {v}.")
-            seen.add(v)
-        for z in ("z1","z2","z3","z4"):
-            if int(a.get(z,0))<=0: errors.append(f"{name}: {z.upper()} debe ser mayor que cero.")
-        if str(a.get("kinematics","ROTARY")).upper()!="ROTARY": a["cycle_length"]=0.0
+    errors = []
+    names = set()
+    aliases = set()
+    aliases2 = set()
+    axes = [normalize_axis(a, i) for i, a in enumerate(cfg.get("axes", []), 1)]
+    active = [a for a in axes if a["enabled"]]
+    if not active:
+        errors.append("Debe existir al menos un eje activo.")
+    if not str(cfg.get("cpu_device_id", "")).startswith("DeviceID("):
+        errors.append("Falta el descriptor de la CPU.")
+    if not str(cfg.get("ethercat_master_device_id", "")).startswith("DeviceID("):
+        errors.append("Falta el descriptor del EtherCAT Master.")
+    path = str(cfg.get("project_path", "")).strip()
+    if not path.lower().endswith(".project"):
+        errors.append("La ruta del proyecto debe terminar en .project.")
+    for a in active:
+        name = a["name"]
+        if not IDENTIFIER.match(name):
+            errors.append(f"{name}: el nombre debe empezar por letra o _, y solo llevar letras "
+                          f"sin tilde, números y _ (es el nombre del eje en el proyecto).")
+        if name.lower() in names:
+            errors.append(f"Nombre duplicado: {name}.")
+        names.add(name.lower())
+        if not str(a.get("device_id", "")).startswith("DeviceID("):
+            errors.append(f"{name}: falta el descriptor del drive.")
+        for key, seen, label in (("station_alias", aliases, "Alias"),
+                                 ("second_station_alias", aliases2, "Second Alias")):
+            value = int(a[key])
+            if value in seen:
+                errors.append(f"{label} duplicado: {value}.")
+            seen.add(value)
+        if a["station_alias"] and a["station_alias"] in aliases2:
+            errors.append(f"{name}: el Alias {a['station_alias']} coincide con un Second Alias.")
+        try:
+            if normalize_number(a["feed_constant"]) <= 0:
+                errors.append(f"{name}: el Feed Constant debe ser mayor que cero.")
+        except Exception:
+            errors.append(f"{name}: el Feed Constant no es un número.")
+        if a["traversing_range"] == "MODULO":
+            try:
+                if normalize_number(a["cycle_length"]) <= 0:
+                    errors.append(f"{name}: el Cycle Length debe ser mayor que cero en un eje módulo.")
+            except Exception:
+                errors.append(f"{name}: el Cycle Length no es un número.")
+    for group in cfg.get("robot_groups", []) or []:
+        used = list((group.get("axes") or {}).values())
+        if len(used) != len(set(used)):
+            errors.append(f"{group.get('name', 'Grupo')}: hay ejes repetidos.")
+        for axis_name in used:
+            if axis_name.lower() not in names:
+                errors.append(f"{group.get('name', 'Grupo')}: el eje {axis_name} no existe o no está activo.")
     return errors
 
 
-def config_json(cfg): return json.dumps(cfg,indent=2,ensure_ascii=False)
+def config_json(cfg):
+    return json.dumps(cfg, indent=2, ensure_ascii=False)
 
 
-def axis_st(axes):
-    dec=["PROGRAM PLC_PRG","VAR"]; impl=[]
-    for a in axes:
-        if not a.get("enabled",True): continue
-        name=re.sub(r"\W","_",a["name"]); ref="Axis_"+name
-        rotary=str(a.get("kinematics","ROTARY")).upper()=="ROTARY"
-        tr="L_MC1P_TraversingRange.Modulo" if a.get("traversing_range","MODULO")=="MODULO" else "L_MC1P_TraversingRange.Limited"
-        dec += [f"    fbChangeMachineData_{name} : L_MC1P_ChangeMachineData;",f"    xExecuteChangeMachineData_{name} : BOOL := TRUE;",f"    xMachineDataDone_{name} : BOOL;",f"    xMachineDataError_{name} : BOOL;"]
-        impl += [f"// Machine data for {a['name']}",f"fbChangeMachineData_{name}(",f"    Axis := {ref},",f"    xExecute := xExecuteChangeMachineData_{name},","    xSetFeedconstant := TRUE,",f"    lrFeedconstant := {lreal(a.get('feed_constant',0))},","    xSetGearFactor := TRUE,",f"    dwGearDenominator := {int(a.get('z1',1))}, // Z1",f"    dwGearNumerator := {int(a.get('z2',1))},   // Z2","    xSetAddGearFactor := TRUE,",f"    dwAddGearDenominator := {int(a.get('z3',1))}, // Z3",f"    dwAddGearNumerator := {int(a.get('z4',1))},   // Z4","    xSetPosResolution := FALSE,","    dwPosResolution := 0,","    xSetOrientation := FALSE,","    xOrientation := FALSE,","    xSetTraversingRange := TRUE,",f"    eTraversingRange := {tr},",f"    xSetCycleLength := {'TRUE' if rotary else 'FALSE'},",f"    lrCycleLength := {lreal(a.get('cycle_length',0) if rotary else 0)}",");","",f"xMachineDataDone_{name} := fbChangeMachineData_{name}.xDone;",f"xMachineDataError_{name} := fbChangeMachineData_{name}.xError;",f"IF xMachineDataDone_{name} OR xMachineDataError_{name} THEN",f"    xExecuteChangeMachineData_{name} := FALSE;","END_IF;",""]
-    dec.append("END_VAR")
-    return "\n".join(dec)+"\n", "\n".join(impl)
+# ============================================================ script de PLC Designer
+
+# Datos de máquina del objeto de eje (L_MC1P / AXIS_REF). Se buscan por Id de
+# parámetro, 0x10000000 + subíndice: el Id no depende del eje, mientras que el
+# índice visible (0x51xx:sss) lo reparte PLC Designer y no se puede prever.
+AXIS_PARAMETERS = {
+    "MOTION_KIND": 20,        # 1 traslación, 2 rotación
+    "ADD_GEAR_NUMERATOR": 25,
+    "ADD_GEAR_DENOMINATOR": 26,
+    "TRAVERSING_RANGE": 30,   # 0 módulo, 1 limitado
+    "CYCLE_LENGTH": 31,
+    "FEED_CONSTANT": 32,
+    "GEAR_NUMERATOR": 33,
+    "GEAR_DENOMINATOR": 34,
+}
 
 
-def generate_plc_script(cfg):
-    errors=validate_config(cfg)
-    if errors: raise ValueError("\n".join(errors))
-    axes=[a for a in cfg["axes"] if a.get("enabled",True)]
-    declaration,implementation=axis_st(axes)
-    slaves=[]
-    for a in axes:
-        slaves.append({k:a.get(k) for k in ["name","drive_type","safety_variant","i950_variant","descriptor_label","device_id","station_alias","second_station_alias","z1","z2","z3","z4","feed_constant","traversing_range","cycle_length","kinematics"]})
-    return f"""# -*- coding: utf-8 -*-
-# Generado por Lenze Machine Builder Web
-# Ejecutar en PLC Designer 4.2: Tools > Scripting > Execute Script File
+def axis_machine_data(a):
+    """Los parámetros del objeto de eje, como pares (clave, valor en texto IEC).
+
+    Reductora: se conserva la correspondencia que usaba L_MC1P_ChangeMachineData en
+    las versiones anteriores de esta herramienta: Z1 denominador y Z2 numerador de la
+    reductora; Z3 denominador y Z4 numerador de la reductora adicional."""
+    modulo = a["traversing_range"] == "MODULO"
+    data = [
+        ("MOTION_KIND", "2" if a["kinematics"] == "ROTARY" else "1"),
+        ("TRAVERSING_RANGE", "0" if modulo else "1"),
+        ("FEED_CONSTANT", format_decimal(a["feed_constant"])),
+        ("GEAR_NUMERATOR", str(int(a["z2"]))),
+        ("GEAR_DENOMINATOR", str(int(a["z1"]))),
+        ("ADD_GEAR_NUMERATOR", str(int(a["z4"]))),
+        ("ADD_GEAR_DENOMINATOR", str(int(a["z3"]))),
+    ]
+    if modulo:
+        data.append(("CYCLE_LENGTH", format_decimal(a["cycle_length"])))
+    return data
+
+
+def _ascii_literal(value):
+    """Literal Python aceptado por IronPython 2.7 con el fichero en ASCII."""
+    return ascii(value)
+
+
+SCRIPT_TEMPLATE = r'''# -*- coding: ascii -*-
+# Generated by Lenze Machine Builder Web.
+# Run it in PLC Designer 4.2: Tools > Scripting > Execute Script File.
+#
+# It creates the project with the controller, the EtherCAT Master, one drive and
+# one motion axis object per axis, and writes each axis's MACHINE DATA (motion
+# kind, traversing range, cycle length, feed constant and gear factors) into the
+# PROJECT, as axis parameters. No function block is needed in the controller.
+import os
 import traceback
-CPU_MODEL = {cfg['cpu_model']!r}
-CPU_VERSION = {cfg.get('cpu_version','')!r}
-CPU_DEVICE_ID = {cfg.get('cpu_device_id','')!r}
-ETHERCAT_MASTER_DEVICE_ID = {cfg.get('ethercat_master_device_id','')!r}
-ETHERCAT_MASTER_VERSION = {cfg.get('ethercat_master_version','')!r}
-PROJECT_PATH = {cfg.get('project_path',r'C:\\Temp\\LenzeMachine_Auto.project')!r}
-ETHERCAT_SLAVES = {slaves!r}
 
-def log(text): print("[Machine Builder] " + str(text))
+PROJECT_PATH = __PROJECT_PATH__
+CPU_MODEL = __CPU_MODEL__
+CPU_DEVICE_ID = __CPU_DEVICE_ID__
+ETHERCAT_MASTER_DEVICE_ID = __MASTER_DEVICE_ID__
+AXES = __AXES__
+ROBOT_GROUPS = __ROBOT_GROUPS__
+
+# Universal motion axis object (L_MC1P). Its machine data are found by parameter
+# Id = 0x10000000 + subindex, which does not depend on the axis.
+AXIS_TYPE = 33601
+AXIS_ID = "1028 0100"
+AXIS_VERSION_FALLBACK = "4.0.0.0"
+PARAMETER_BASE = 0x10000000
+PARAMETERS = __PARAMETERS__
+
+# Axis connection parameters that link it to its EtherCAT drive.
+LINK_ECAT_REFERENCE = 20
+LINK_SLOT = 21
+LINK_ADDRESS = 22
+LINK_NAME = 24
+
+WARNINGS = []
+DONE = []
+
+
+def log(text):
+    print("[Machine Builder] " + str(text))
+
+
+def warn(text):
+    WARNINGS.append(text)
+    log("WARNING: " + text)
+
 
 def exact_device(search_text, expected_id):
     for d in device_repository.get_all_devices(search_text) or []:
-        if str(d.device_id)==str(expected_id): return d
-    raise Exception("DeviceId no encontrado: " + str(expected_id))
+        if str(d.device_id) == str(expected_id):
+            return d
+    raise Exception("Device not found in the repository: " + str(expected_id))
 
-def find_one(parent,name):
-    found=parent.find(name,True)
+
+def version_key(text):
+    parts = []
+    for piece in str(text).replace("-", ".").split("."):
+        try:
+            parts.append(int(piece))
+        except ValueError:
+            parts.append(0)
+    return parts
+
+
+def axis_version():
+    """Newest universal axis installed; the fallback if it cannot be asked."""
+    best = None
+    try:
+        for d in device_repository.get_all_devices() or []:
+            did = d.device_id
+            if int(did.type) == AXIS_TYPE and str(did.id) == AXIS_ID:
+                if best is None or version_key(did.version) > version_key(best):
+                    best = str(did.version)
+    except Exception:
+        pass
+    return best or AXIS_VERSION_FALLBACK
+
+
+def find_one(parent, name):
+    found = parent.find(name, True)
     return found[0] if found else None
 
-def main():
-    project=projects.create(PROJECT_PATH)
-    cpu=exact_device("Controller " + CPU_MODEL, CPU_DEVICE_ID)
-    project.add(cpu.device_info.default_instance_name,cpu.device_id)
-    controller=project.find("Device",True)[0]
 
-    # Crear Application/PLC_PRG/Task Configuration/MainTask antes de insertar
-    # EtherCAT Master. Así el proyecto ya dispone de una tarea cíclica válida
-    # y no es necesario crear una tarea EtherCAT adicional.
-    application=find_one(project,"Application")
-    if application is None:
-        raise Exception("Application no encontrada después de insertar la CPU.")
+def functions_node(controller):
+    node = find_one(controller, "Functions")
+    if node is not None:
+        return node
+    for child in controller.get_children(False):
+        if getattr(child, "is_explicit_connector", False):
+            return child
+    raise Exception("The controller has no 'Functions' node to add the axes to.")
 
-    plc_prg=find_one(application,"PLC_PRG")
-    if plc_prg is None:
-        try:
-            plc_prg=application.create_pou("PLC_PRG",PouType.Program)
-        except:
-            plc_prg=application.create_pou("PLC_PRG")
 
-    task_cfg=find_one(application,"Task Configuration")
-    if task_cfg is None:
-        task_cfg=application.create_task_configuration()
-
-    main_task=find_one(task_cfg,"MainTask")
-    if main_task is None:
-        main_task=task_cfg.create_task("MainTask")
-
-    interval_written=False
-    for interval_value in ["T#10ms","t#10ms","10ms","10000"]:
-        try:
-            main_task.interval=interval_value
-            interval_written=True
-            break
-        except:
-            pass
-
-    if not interval_written:
-        raise Exception("No se pudo configurar MainTask a 10 ms.")
-
+def set_parameter(device, label, key, value):
+    """Writes a parameter by Id and reads it back. Returns True if it holds."""
+    pid = PARAMETER_BASE + PARAMETERS[key]
     try:
-        main_task.priority=1
-    except:
-        try:
-            main_task.priority="1"
-        except:
-            pass
-
+        parameter = device.device_parameters.by_id(pid)
+    except Exception:
+        parameter = None
+    if parameter is None:
+        warn(label + ": parameter " + key + " (Id 0x%08X) does not exist" % pid)
+        return False
     try:
-        main_task.task_type="Cyclic"
-    except:
-        try:
-            main_task.type="Cyclic"
-        except:
-            pass
-
-    try:
-        main_task.pous.add("PLC_PRG")
+        parameter.value = value
+        now = str(parameter.value)
     except Exception as error:
-        log("Aviso asociando PLC_PRG a MainTask: " + str(error))
+        warn(label + ": could not write " + key + " = " + value + " (" + str(error) + ")")
+        return False
+    try:
+        same = abs(float(now) - float(value)) < 1e-9
+    except ValueError:
+        same = now.strip().upper() == value.strip().upper()
+    if not same:
+        warn(label + ": " + key + " was written as " + value + " but reads " + now)
+        return False
+    return True
 
-    master_desc=exact_device("EtherCAT Master",ETHERCAT_MASTER_DEVICE_ID)
-    controller.add("EtherCAT_Master",master_desc.device_id)
-    master=project.find("EtherCAT_Master",True)[0]
-    sync_desc=None
-    for d in device_repository.get_all_devices("Controller Sync Device") or []:
-        if "controller" in str(d.device_info.name).lower() and "sync" in str(d.device_info.name).lower(): sync_desc=d; break
-    if sync_desc is None: raise Exception("Controller Sync Device no encontrado")
-    master.add("Controller_Sync_Device",sync_desc.device_id)
-    for slave in ETHERCAT_SLAVES:
-        desc=exact_device(slave["drive_type"],slave["device_id"])
-        try: master.add(slave["name"],desc.device_id)
-        except Exception as error:
-            if not project.find(slave["name"],True): raise error
-    application=find_one(project,"Application")
-    plc_prg=find_one(application,"PLC_PRG")
-    if plc_prg is None:
+
+def link_axis(axis, drive_name):
+    """Links the axis object to its drive (connection parameters of the axis)."""
+    values = {
+        LINK_ECAT_REFERENCE: "'" + drive_name + "'",
+        LINK_SLOT: "0",
+        LINK_ADDRESS: "ADR(" + drive_name + ".etcslave.m_pioconfigconnector)",
+        LINK_NAME: "'" + drive_name + ".etcslave.m_pioconfigconnector'",
+    }
+    for connector in axis.connectors:
         try:
-            plc_prg=application.create_pou("PLC_PRG",PouType.Program)
-        except:
-            plc_prg=application.create_pou("PLC_PRG")
-    plc_prg.textual_declaration.replace({declaration!r})
-    plc_prg.textual_implementation.replace({implementation!r})
-    project.save()
-    log("Proyecto generado: " + PROJECT_PATH)
+            host = connector.host_parameters
+        except Exception:
+            continue
+        if LINK_ECAT_REFERENCE not in host:
+            continue
+        try:
+            for pid, value in values.items():
+                host.by_id(pid).value = value
+            return True
+        except Exception as error:
+            warn(axis.get_name() + ": could not link it to " + drive_name + " (" + str(error)
+                 + "). Link it by hand in the axis editor.")
+            return False
+    warn(axis.get_name() + ": no connection parameters found. Link it by hand to " + drive_name + ".")
+    return False
 
-try: main()
+
+def create_task(application):
+    task_cfg = find_one(application, "Task Configuration")
+    if task_cfg is None:
+        task_cfg = application.create_task_configuration()
+    task = find_one(task_cfg, "MainTask")
+    if task is None:
+        task = task_cfg.create_task("MainTask")
+    try:
+        task.kind_of_task = KindOfTask.Cyclic
+    except Exception as error:
+        warn("MainTask: could not make it cyclic (" + str(error) + ")")
+    written = False
+    for value in ("t#10ms", "T#10ms", "10"):
+        try:
+            task.interval = value
+            written = True
+            break
+        except Exception:
+            pass
+    if not written:
+        warn("MainTask: could not set the 10 ms interval")
+    try:
+        task.priority = "1"
+    except Exception as error:
+        warn("MainTask: could not set the priority (" + str(error) + ")")
+    try:
+        task.pous.add("PLC_PRG")
+    except Exception as error:
+        warn("MainTask: could not call PLC_PRG (" + str(error) + ")")
+
+
+def main():
+    if os.path.exists(PROJECT_PATH):
+        raise Exception("The project already exists: " + PROJECT_PATH
+                        + ". Choose another path or delete it first.")
+    project = projects.create(PROJECT_PATH, True)
+    log("Project created: " + PROJECT_PATH)
+
+    cpu = exact_device("Controller " + CPU_MODEL, CPU_DEVICE_ID)
+    cpu_name = str(cpu.device_info.default_instance_name) or "Device"
+    project.add(cpu_name, cpu.device_id)
+    controller = find_one(project, cpu_name)
+    if controller is None:
+        raise Exception("The controller was not found after adding it: " + cpu_name)
+
+    application = find_one(project, "Application")
+    if application is None:
+        raise Exception("No Application after adding the controller.")
+    plc_prg = find_one(application, "PLC_PRG")
+    if plc_prg is None:
+        plc_prg = application.create_pou("PLC_PRG", PouType.Program)
+    plc_prg.textual_declaration.replace("PROGRAM PLC_PRG\nVAR\nEND_VAR\n")
+    plc_prg.textual_implementation.replace(
+        "// The axis machine data are project parameters of each axis object.\n")
+    create_task(application)
+
+    master_desc = exact_device("EtherCAT Master", ETHERCAT_MASTER_DEVICE_ID)
+    controller.add("EtherCAT_Master", master_desc.device_id)
+    master = find_one(project, "EtherCAT_Master")
+    sync_desc = None
+    for d in device_repository.get_all_devices("Controller Sync Device") or []:
+        name = str(d.device_info.name).lower()
+        if "controller" in name and "sync" in name:
+            sync_desc = d
+            break
+    if sync_desc is None:
+        raise Exception("Controller Sync Device not found in the repository.")
+    master.add("Controller_Sync_Device", sync_desc.device_id)
+
+    functions = functions_node(controller)
+    version = axis_version()
+    log("Axis object: type %d, id %s, version %s" % (AXIS_TYPE, AXIS_ID, version))
+
+    for a in AXES:
+        drive_name = "Drv_" + a["name"]
+        desc = exact_device(a["drive_type"], a["device_id"])
+        master.add(drive_name, desc.device_id)
+        functions.add(a["name"], AXIS_TYPE, AXIS_ID, version)
+        axis = find_one(project, a["name"])
+        if axis is None:
+            raise Exception("Axis object not found after adding it: " + a["name"])
+        link_axis(axis, drive_name)
+        ok = 0
+        for key, value in a["machine_data"]:
+            if set_parameter(axis, a["name"], key, value):
+                ok += 1
+        DONE.append("%s: drive %s, %d/%d machine data written"
+                    % (a["name"], drive_name, ok, len(a["machine_data"])))
+
+    for a in AXES:
+        warn(a["name"] + ": EtherCAT station alias %d / second alias %d not written; "
+             "set them in the drive if needed" % (a["station_alias"], a["second_station_alias"]))
+    for g in ROBOT_GROUPS:
+        warn("Robot group " + g["name"] + " (" + g["type"] + ") not created; create it by hand with "
+             + ", ".join(role + "=" + axis for role, axis in sorted(g["axes"].items())))
+
+    project.save()
+    log("-" * 60)
+    for line in DONE:
+        log(line)
+    log("RESULT: " + ("OK" if not WARNINGS else "DONE WITH %d WARNING(S)" % len(WARNINGS)))
+    for line in WARNINGS:
+        log("  - " + line)
+
+
+try:
+    main()
 except Exception as error:
-    log("ERROR: " + str(error)); traceback.print_exc(); raise
-"""
+    log("ERROR: " + str(error))
+    traceback.print_exc()
+    raise
+'''
+
+
+def generate_plc_script(cfg):
+    errors = validate_config(cfg)
+    if errors:
+        raise ValueError("\n".join(errors))
+    axes = []
+    for i, raw in enumerate(cfg["axes"], 1):
+        a = normalize_axis(raw, i)
+        if not a["enabled"]:
+            continue
+        axes.append({
+            "name": a["name"],
+            "drive_type": a["drive_type"],
+            "device_id": a["device_id"],
+            "station_alias": int(a["station_alias"]),
+            "second_station_alias": int(a["second_station_alias"]),
+            "machine_data": axis_machine_data(a),
+        })
+    groups = [{"name": str(g.get("name", "")), "type": str(g.get("type", "")),
+               "axes": {str(k): str(v) for k, v in (g.get("axes") or {}).items()}}
+              for g in cfg.get("robot_groups", []) or []]
+    script = SCRIPT_TEMPLATE
+    for token, value in (
+        ("__PROJECT_PATH__", str(cfg["project_path"]).strip()),
+        ("__CPU_MODEL__", cfg["cpu_model"]),
+        ("__CPU_DEVICE_ID__", cfg["cpu_device_id"]),
+        ("__MASTER_DEVICE_ID__", cfg["ethercat_master_device_id"]),
+        ("__AXES__", axes),
+        ("__ROBOT_GROUPS__", groups),
+        ("__PARAMETERS__", AXIS_PARAMETERS),
+    ):
+        script = script.replace(token, _ascii_literal(value))
+    return script

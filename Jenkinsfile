@@ -9,10 +9,12 @@ pipeline {
             }
         }
 
-        stage('Mostrar contenido') {
+        stage('Tests') {
             steps {
-                sh 'pwd'
-                sh 'ls -la'
+                // The core, the local assistant and auth need only the standard
+                // library. The UI tests run too if streamlit is installed on the
+                // agent, and are skipped otherwise.
+                sh 'python3 -m unittest discover -s tests -v'
             }
         }
 

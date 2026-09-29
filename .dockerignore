@@ -1,0 +1,11 @@
+.git
+.gitignore
+__pycache__/
+*.py[cod]
+tests/
+Jenkinsfile
+LenzeMachineBuilder_V6_IA.py
+Export_DeviceRepository.py
+.venv/
+venv/
+.env

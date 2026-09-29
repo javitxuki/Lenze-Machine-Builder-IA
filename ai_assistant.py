@@ -14,10 +14,17 @@ import re
 import unicodedata
 from copy import deepcopy
 
+from machine_builder_core import (
+    CPU_MODELS, DRIVES, KINEMATICS, SAFETY, I950_VARIANTS, TRAVERSING,
+    calculate_feed_constant, normalize_safety, normalize_i950_variant,
+    normalize_traversing_range,
+)
 
-SUPPORTED_CPUS = ("c430", "c520", "c550") 
-SUPPORTED_DRIVES = ("i550", "i750", "i950") 
-SUPPORTED_KINEMATICS = ("ROTARY", "LEADSCREW", "BELT", "RACK_PINION")
+# Los mismos valores que la aplicacion: una propuesta con otros nombres ("Advanced
+# Safety", "Compact", "LINEAR") no casaba con los desplegables y reventaba la pantalla.
+SUPPORTED_CPUS = tuple(CPU_MODELS)
+SUPPORTED_DRIVES = tuple(DRIVES)
+SUPPORTED_KINEMATICS = tuple(KINEMATICS)
 
 
 # ============================================================
@@ -51,40 +58,14 @@ def _formatted_number(value):
 
 
 def _feed(kinematics, parameter, z1=1, z2=1, z3=1, z4=1):
-    """
-    Calcula el feed constant de forma coherente con la lógica
-    del Machine Builder.
-    """
+    """Feed constant con la MISMA formula que la aplicacion.
 
-    kinematics = str(kinematics or "ROTARY").upper()
-
-    parameter = _number(parameter, 360.0)
-    z1 = _number(z1, 1)
-    z2 = _number(z2, 1)
-    z3 = _number(z3, 1)
-    z4 = _number(z4, 1)
-
-    if parameter is None:
-        parameter = 360.0
-
-    if z1 == 0:
-        z1 = 1
-    if z2 == 0:
-        z2 = 1
-    if z3 == 0:
-        z3 = 1
-    if z4 == 0:
-        z4 = 1
-
-    ratio = (z1 / z2) * (z3 / z4)
-
-    if kinematics == "ROTARY":
-        return parameter * ratio
-
-    if kinematics in ("LEADSCREW", "BELT", "RACK_PINION"):
-        return parameter * ratio
-
-    return parameter * ratio
+    La relacion de la reductora (Z1..Z4) va en sus propios parametros del eje y no
+    se mezcla aqui. Los Z se aceptan por compatibilidad y no se usan."""
+    try:
+        return calculate_feed_constant(kinematics, _number(parameter, 360.0))
+    except Exception:
+        return 360.0
 
 
 def _new_axis(index):
@@ -193,16 +174,10 @@ def _extract_drive(text):
 def _extract_safety(text):
     text = _normalize(text)
 
-    if "advanced safety" in text or "safety advanced" in text:
-        return "Advanced Safety"
+    if re.search(r"\b(extended|advanced|extendida|avanzada)\b", text):
+        return "Extended Safety"
 
-    if "basic safety" in text or "safety basic" in text:
-        return "Basic Safety"
-
-    if re.search(r"\badvanced\b", text):
-        return "Advanced Safety"
-
-    if re.search(r"\bbasic\b", text):
+    if re.search(r"\b(basic|basica)\b", text):
         return "Basic Safety"
 
     return None
@@ -211,8 +186,8 @@ def _extract_safety(text):
 def _extract_i950_variant(text):
     text = _normalize(text)
 
-    if "compact" in text:
-        return "Compact"
+    if re.search(r"dc[\s-]?link", text):
+        return "DC-Link"
 
     if "normal" in text:
         return "Normal"
@@ -223,14 +198,11 @@ def _extract_i950_variant(text):
 def _extract_traversing_range(text):
     text = _normalize(text)
 
-    if "infinite" in text:
-        return "INFINITE"
-
-    if "modulo" in text:
+    if re.search(r"\b(modulo|infinite|infinito|sin fin|endless)\b", text):
         return "MODULO"
 
-    if "linear" in text:
-        return "LINEAR"
+    if re.search(r"\b(limited|limitado|linear|lineal)\b", text):
+        return "LIMITED"
 
     return None
 
@@ -374,8 +346,8 @@ def local_parse(prompt, current_axes, current_config=None):
         safety = _extract_safety(text)
 
         if safety:
-            axis["safety_variant"] = safety
-            changes.append(f"Eje {index}: safety → {safety}")
+            axis["safety_variant"] = normalize_safety(safety, axis.get("drive_type"))
+            changes.append(f"Eje {index}: safety → {axis['safety_variant']}")
 
         # i950 variant
         i950_variant = _extract_i950_variant(text)
@@ -404,6 +376,8 @@ def local_parse(prompt, current_axes, current_config=None):
         z_values = _extract_z_values(text)
 
         for key, value in z_values.items():
+            value = max(1, int(round(value or 1)))
+            z_values[key] = value
             axis[key] = value
             changes.append(f"Eje {index}: {key} → {_formatted_number(value)}")
 
@@ -534,10 +508,10 @@ def _openai_model():
     """
     Modelo utilizado para interpretar las órdenes de Machine Builder.
 
-    No depende de una variable de Railway.
+    Se puede cambiar con la variable OPENAI_MODEL sin tocar el código.
     """
 
-    return "gpt-5.6-luna"
+    return os.getenv("OPENAI_MODEL", "gpt-5.6-luna").strip() or "gpt-5.6-luna"
 
 
 def _build_openai_prompt(prompt, current_axes, current_config=None):
@@ -559,7 +533,7 @@ IMPORTANTE:
   "el eje 1 que sea i950",
   "eje 2 i550",
   "pon husillo en el eje 1",
-  "usa Advanced Safety en el eje 3",
+  "usa Extended Safety en el eje 3",
   "pon z1 2 y z2 5 en el eje 1",
   "CPU C550",
   etc.
@@ -602,13 +576,19 @@ REGLAS PARA "axes":
 - drive_type solamente puede ser:
   "i550", "i750", "i950"
 - safety_variant solamente puede ser:
-  "Basic Safety" o "Advanced Safety"
+  "Basic Safety" o "Extended Safety" (i550 solo admite "Basic Safety")
 - i950_variant solamente puede ser:
-  "Normal" o "Compact"
+  "Normal" o "DC-Link"
 - kinematics solamente puede ser:
   "ROTARY", "LEADSCREW", "BELT", "RACK_PINION"
 - traversing_range solamente puede ser:
-  "MODULO", "INFINITE", "LINEAR"
+  "MODULO" (eje sin fin, p. ej. un plato o una cinta) o "LIMITED" (eje con topes)
+- kinematic_parameter es: 360 para ROTARY, el paso del husillo en mm para
+  LEADSCREW, y el diámetro efectivo en mm para BELT y RACK_PINION.
+- feed_constant es el avance por vuelta de la salida de la reductora:
+  360 para ROTARY, el paso para LEADSCREW y pi × diámetro para BELT y RACK_PINION.
+  Z1..Z4 son la relación de la reductora y NO se multiplican en el feed constant.
+- cycle_length solo tiene sentido con traversing_range "MODULO".
 
 No añadas explicaciones fuera del JSON.
 """
@@ -687,27 +667,15 @@ def _sanitize_axis(axis, index):
     if result["drive_type"] not in SUPPORTED_DRIVES:
         result["drive_type"] = "i950"
 
-    if result["safety_variant"] not in (
-        "Basic Safety",
-        "Advanced Safety",
-    ):
-        result["safety_variant"] = "Basic Safety"
+    result["safety_variant"] = normalize_safety(result["safety_variant"], result["drive_type"])
+    result["i950_variant"] = normalize_i950_variant(result["i950_variant"], result["drive_type"])
 
-    if result["i950_variant"] not in (
-        "Normal",
-        "Compact",
-    ):
-        result["i950_variant"] = "Normal"
-
-    if result["kinematics"] not in SUPPORTED_KINEMATICS:
+    if str(result["kinematics"]).upper() in SUPPORTED_KINEMATICS:
+        result["kinematics"] = str(result["kinematics"]).upper()
+    else:
         result["kinematics"] = "ROTARY"
 
-    if result["traversing_range"] not in (
-        "MODULO",
-        "INFINITE",
-        "LINEAR",
-    ):
-        result["traversing_range"] = "MODULO"
+    result["traversing_range"] = normalize_traversing_range(result["traversing_range"])
 
     # Tipos numéricos
     for key in (
@@ -732,6 +700,12 @@ def _sanitize_axis(axis, index):
                     result[key] = int(value)
                 else:
                     result[key] = value
+
+    for key in ("z1", "z2", "z3", "z4"):
+        try:
+            result[key] = max(1, int(round(float(result[key]))))
+        except Exception:
+            result[key] = 1
 
     # Boolean
     result["enabled"] = bool(result.get("enabled", True))
