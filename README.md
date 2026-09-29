@@ -13,8 +13,12 @@ de ingeniería (`Tools > Scripting > Execute Script File`).
 - El EtherCAT Master y el Controller Sync Device.
 - Por cada eje activo:
   - el drive EtherCAT, llamado `Drv_<eje>`;
-  - el objeto de eje de motion (eje universal L_MC1P) bajo `Device > Functions`, con el nombre del eje;
-  - los **datos de máquina escritos como parámetros del eje en el proyecto**, sin ningún bloque de función en el controlador.
+  - su eje de motion bajo `Device > Functions`, con el nombre del eje. Lo añade el propio
+    PLC Designer al insertar el drive: el script fija antes la opción del proyecto que
+    pregunta por ello (`InsertFunctionNodeSettings`), así que no sale ningún diálogo;
+  - los **datos de máquina escritos como parámetros del eje en el proyecto**, sin ningún
+    bloque de función en el controlador. Los parámetros del eje los crea la compilación,
+    así que el script compila la aplicación antes de escribirlos.
 
   | Dato | Parámetro del eje | Valor |
   |---|---|---|
@@ -30,8 +34,10 @@ de ingeniería (`Tools > Scripting > Execute Script File`).
 
 Al acabar, el script imprime un resumen: `RESULT: OK` o la lista de avisos. Todavía **no**
 escribe en el proyecto el Station Alias ni el Second Alias de los drives, ni crea los
-Robot Groups: los valida y los lista en los avisos para configurarlos a mano. Si
-PLC Designer no deja enlazar por script el eje con su drive, también lo avisa.
+Robot Groups: los valida y los lista en los avisos para configurarlos a mano.
+
+Probado en PLC Designer 4.2 con un c520 1.15.0.4 y dos i950: 8/8 y 7/7 datos de máquina
+escritos, releídos y conservados al guardar y volver a abrir el proyecto.
 
 ## Local
 
